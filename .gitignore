@@ -1,3 +1,10 @@
 external/
 models/
-results/
+results/*
+!results/baseline_benchmark/
+results/baseline_benchmark/*
+!results/baseline_benchmark/full/
+results/baseline_benchmark/full/*
+!results/baseline_benchmark/full/prefill-summary.csv
+!results/baseline_benchmark/full/decode-summary.csv
+!results/baseline_benchmark/full/pl_1_pp_32768_tg_32.log
