@@ -175,8 +175,15 @@ def write_prefill_summary(by_key, output_path):
 
 def write_decode_summary(by_key, output_path):
     rows = []
+    best_tg_by_prompt = {}
+    for pl, pp, tg in by_key:
+        if tg > 0:
+            best_tg_by_prompt[(pl, pp)] = max(tg, best_tg_by_prompt.get((pl, pp), 0))
+
     for (pl, pp, tg), (bench_total, records_total) in sorted(by_key.items()):
         if tg == 0:
+            continue
+        if tg != best_tg_by_prompt.get((pl, pp)):
             continue
         base = by_key.get((pl, pp, 0))
         if base is None:
@@ -238,7 +245,7 @@ def main():
     parser.add_argument("--ubatch", type=int, default=512)
     parser.add_argument("--threads", type=int, default=6)
     parser.add_argument("--prompts", default="0 128 512 2048 4096 8192 16384 32768")
-    parser.add_argument("--decode-tokens", type=int, default=32)
+    parser.add_argument("--decode-tokens", type=int, default=128)
     parser.add_argument("--parallelism", default="1")
     parser.add_argument("--profile-skip-graphs", type=int, default=1)
     args = parser.parse_args()

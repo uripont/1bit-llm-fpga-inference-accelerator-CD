@@ -57,9 +57,10 @@ src/baseline_benchmark/run-full-benchmark.py
 ```
 
 By default this sweeps prompt lengths 0, 128, 512, 2048, 4096, 8192, 16384,
-32768 with a 32-token decode run for each context length. The context window
-defaults to 33024 so the 32768-token prompt still has room for the decode
-tokens.
+32768 with a 128-token decode run for each context length. The longer decode
+run makes the profiled decode delta less sensitive to prefill-subtraction noise.
+The context window defaults to 33024 so the 32768-token prompt still has room
+for decode tokens when a shorter 32-token max-context run is used.
 
 Default paths:
 
