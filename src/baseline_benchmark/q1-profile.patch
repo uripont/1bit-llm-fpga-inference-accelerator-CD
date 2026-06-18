@@ -1,0 +1,332 @@
+diff --git a/ggml/src/ggml-blas/ggml-blas.cpp b/ggml/src/ggml-blas/ggml-blas.cpp
+index b4c7352..2886823 100644
+--- a/ggml/src/ggml-blas/ggml-blas.cpp
++++ b/ggml/src/ggml-blas/ggml-blas.cpp
+@@ -5,6 +5,8 @@
+ #include <future>
+ #include <vector>
+ #include <cstring>
++#include <cinttypes>
++#include <cstdlib>
+ 
+ #if defined(GGML_BLAS_USE_ACCELERATE)
+ #   include <Accelerate/Accelerate.h>
+@@ -27,6 +29,112 @@ struct ggml_backend_blas_context {
+ #endif
+ };
+ 
++// Small aggregate profiler for BLAS-backed ops. It intentionally records by
++// ggml op and src0 type because the benchmark only needs bottleneck classes.
++struct ggml_blas_op_profile_entry {
++    uint64_t calls = 0;
++    uint64_t time_us = 0;
++    uint64_t dst_elems = 0;
++    uint64_t q1_groups = 0;
++    uint64_t weight_apps = 0;
++};
++
++static ggml_blas_op_profile_entry ggml_blas_op_profile[GGML_OP_COUNT][GGML_TYPE_COUNT + 1];
++static bool ggml_blas_op_profile_enabled = false;
++static bool ggml_blas_op_profile_initialized = false;
++
++// Count logical output elements in a tensor. These are later combined with the
++// input width, to estimate how many fixed-weight applications each matmul did.
++static uint64_t ggml_blas_nelements_u64(const ggml_tensor * tensor) {
++    if (tensor == nullptr) {
++        return 0;
++    }
++
++    uint64_t result = 1;
++    for (int i = 0; i < GGML_MAX_DIMS; i++) {
++        result *= (uint64_t) tensor->ne[i];
++    }
++    return result;
++}
++
++// CSV-like table at process exit. The Python benchmark parser
++// looks for the GGML_BLAS_OP_PROFILE marker and then reads the following rows.
++static void ggml_blas_op_profile_print() {
++    uint64_t total_us = 0;
++    for (int op = 0; op < GGML_OP_COUNT; op++) {
++        for (int type = 0; type <= GGML_TYPE_COUNT; type++) {
++            total_us += ggml_blas_op_profile[op][type].time_us;
++        }
++    }
++
++    if (total_us == 0) {
++        return;
++    }
++
++    fprintf(stderr, "\nGGML_BLAS_OP_PROFILE,csv_v1,total_us,%" PRIu64 "\n", total_us);
++    fprintf(stderr, "op,src0_type,calls,time_us,pct,dst_elems,q1_groups,weight_apps\n");
++
++    for (int op = 0; op < GGML_OP_COUNT; op++) {
++        for (int type = 0; type <= GGML_TYPE_COUNT; type++) {
++            const ggml_blas_op_profile_entry & entry = ggml_blas_op_profile[op][type];
++            if (entry.calls == 0) {
++                continue;
++            }
++
++            const char * type_name = (type == GGML_TYPE_COUNT) ? "none" : ggml_type_name((ggml_type) type);
++            const double pct = 100.0 * (double) entry.time_us / (double) total_us;
++
++            fprintf(stderr, "%s,%s,%" PRIu64 ",%" PRIu64 ",%.4f,%" PRIu64 ",%" PRIu64 ",%" PRIu64 "\n",
++                    ggml_op_name((ggml_op) op), type_name, entry.calls, entry.time_us, pct,
++                    entry.dst_elems, entry.q1_groups, entry.weight_apps);
++        }
++    }
++}
++
++// Enable BLAS profiling only when requested. GGML_CPU_OP_PROFILE also enables
++// this block so taht one environment variable captures both CPU and BLAS backends.
++static void ggml_blas_op_profile_init() {
++    if (ggml_blas_op_profile_initialized) {
++        return;
++    }
++
++    ggml_blas_op_profile_initialized = true;
++    ggml_blas_op_profile_enabled = getenv("GGML_BLAS_OP_PROFILE") != nullptr || getenv("GGML_CPU_OP_PROFILE") != nullptr;
++
++    if (ggml_blas_op_profile_enabled) {
++        atexit(ggml_blas_op_profile_print);
++    }
++}
++
++// Accumulate one finished BLAS op. For Q1_0 matmuls, q1_groups estimates the
++// number of group-128 dequant/dot-product chunks (accelerator work unit we care).
++static void ggml_blas_op_profile_record(const ggml_tensor * tensor, int64_t time_us) {
++    if (!ggml_blas_op_profile_enabled || tensor == nullptr || tensor->op >= GGML_OP_COUNT || time_us < 0) {
++        return;
++    }
++
++    const ggml_tensor * src0 = tensor->src[0];
++    const int type = (src0 != nullptr && src0->type < GGML_TYPE_COUNT) ? src0->type : GGML_TYPE_COUNT;
++
++    ggml_blas_op_profile_entry & entry = ggml_blas_op_profile[tensor->op][type];
++    const uint64_t dst_elems = ggml_blas_nelements_u64(tensor);
++
++    entry.calls++;
++    entry.time_us += (uint64_t) time_us;
++    entry.dst_elems += dst_elems;
++
++    if ((tensor->op == GGML_OP_MUL_MAT || tensor->op == GGML_OP_MUL_MAT_ID) && src0 != nullptr) {
++        const uint64_t src0_cols = (uint64_t) src0->ne[0];
++        entry.weight_apps += dst_elems * src0_cols;
++
++        if (src0->type == GGML_TYPE_Q1_0) {
++            entry.q1_groups += dst_elems * ((src0_cols + 127) / 128);
++        }
++    }
++}
++
+ static void ggml_backend_blas_mul_mat(ggml_backend_blas_context * ctx, struct ggml_tensor * dst) {
+     const struct ggml_tensor * src0 = dst->src[0];
+     const struct ggml_tensor * src1 = dst->src[1];
+@@ -224,6 +320,7 @@ static void ggml_backend_blas_free(ggml_backend_t backend) {
+ 
+ static enum ggml_status ggml_backend_blas_graph_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
+     ggml_backend_blas_context * ctx = (ggml_backend_blas_context *)backend->context;
++    ggml_blas_op_profile_init();
+ 
+     for (int i = 0; i < cgraph->n_nodes; i++) {
+         struct ggml_tensor * node = cgraph->nodes[i];
+@@ -234,11 +331,25 @@ static enum ggml_status ggml_backend_blas_graph_compute(ggml_backend_t backend,
+ 
+         switch (node->op) {
+             case GGML_OP_MUL_MAT:
++                {
++                // Time only the BLAS call
++                const int64_t profile_t0 = ggml_blas_op_profile_enabled ? ggml_time_us() : 0;
+                 ggml_backend_blas_mul_mat(ctx, node);
++                if (ggml_blas_op_profile_enabled) {
++                    ggml_blas_op_profile_record(node, ggml_time_us() - profile_t0);
++                }
++                }
+                 break;
+ 
+             case GGML_OP_OUT_PROD:
++                {
++                // OUT_PROD is rare here, but keeping it makes the profiler generic.
++                const int64_t profile_t0 = ggml_blas_op_profile_enabled ? ggml_time_us() : 0;
+                 ggml_backend_blas_out_prod(ctx, node);
++                if (ggml_blas_op_profile_enabled) {
++                    ggml_blas_op_profile_record(node, ggml_time_us() - profile_t0);
++                }
++                }
+                 break;
+ 
+             case GGML_OP_NONE:
+diff --git a/ggml/src/ggml-cpu/ggml-cpu.c b/ggml/src/ggml-cpu/ggml-cpu.c
+index 8b7acaf..6b58967 100644
+--- a/ggml/src/ggml-cpu/ggml-cpu.c
++++ b/ggml/src/ggml-cpu/ggml-cpu.c
+@@ -78,6 +78,118 @@ float ggml_table_f32_f16[1 << 16];
+ // precomputed f32 table for e8m0 half (1 KB) (simd-mappings.h)
+ float ggml_table_f32_e8m0_half[1 << 8];
+ 
++// Aggregate CPU-side op timings by ggml op and src0 tensor type. This is kept
++// intentionally coarse so the logs stay small.
++struct ggml_cpu_op_profile_entry {
++    uint64_t calls;
++    uint64_t time_us;
++    uint64_t dst_elems;
++    uint64_t q1_groups;
++    uint64_t weight_apps;
++};
++
++static struct ggml_cpu_op_profile_entry ggml_cpu_op_profile[GGML_OP_COUNT][GGML_TYPE_COUNT + 1];
++static bool ggml_cpu_op_profile_enabled = false;
++static bool ggml_cpu_op_profile_initialized = false;
++static bool ggml_cpu_op_profile_active = false;
++static uint64_t ggml_cpu_op_profile_skip_graphs = 0;
++static uint64_t ggml_cpu_op_profile_graphs = 0;
++
++// Count logical output elements in a tensor. For matmul-like ops this combines
++// with src0 width to estimate fixed-weight applications.
++static uint64_t ggml_cpu_nelements_u64(const struct ggml_tensor * tensor) {
++    if (tensor == NULL) {
++        return 0;
++    }
++
++    uint64_t result = 1;
++    for (int i = 0; i < GGML_MAX_DIMS; i++) {
++        result *= (uint64_t) tensor->ne[i];
++    }
++    return result;
++}
++
++// Print a stable CSV-like table at process exit. The benchmark script parses
++// this marker to build prefill/decode bottleneck summaries.
++static void ggml_cpu_op_profile_print(void) {
++    uint64_t total_us = 0;
++    for (int op = 0; op < GGML_OP_COUNT; op++) {
++        for (int type = 0; type <= GGML_TYPE_COUNT; type++) {
++            total_us += ggml_cpu_op_profile[op][type].time_us;
++        }
++    }
++
++    if (total_us == 0) {
++        return;
++    }
++
++    fprintf(stderr, "\nGGML_CPU_OP_PROFILE,csv_v1,total_us,%" PRIu64 "\n", total_us);
++    fprintf(stderr, "op,src0_type,calls,time_us,pct,dst_elems,q1_groups,weight_apps\n");
++
++    for (int op = 0; op < GGML_OP_COUNT; op++) {
++        for (int type = 0; type <= GGML_TYPE_COUNT; type++) {
++            const struct ggml_cpu_op_profile_entry * entry = &ggml_cpu_op_profile[op][type];
++            if (entry->calls == 0) {
++                continue;
++            }
++
++            const char * type_name = (type == GGML_TYPE_COUNT) ? "none" : ggml_type_name((enum ggml_type) type);
++            const double pct = 100.0 * (double) entry->time_us / (double) total_us;
++
++            fprintf(stderr, "%s,%s,%" PRIu64 ",%" PRIu64 ",%.4f,%" PRIu64 ",%" PRIu64 ",%" PRIu64 "\n",
++                    ggml_op_name((enum ggml_op) op), type_name, entry->calls, entry->time_us, pct,
++                    entry->dst_elems, entry->q1_groups, entry->weight_apps);
++        }
++    }
++}
++
++// GGML_CPU_OP_PROFILE opt-in keeps normal llama.cpp runs unchanged. The optional
++// skip count ignores warm-up graphs that are not representative of work.
++static void ggml_cpu_op_profile_init(void) {
++    if (ggml_cpu_op_profile_initialized) {
++        return;
++    }
++
++    ggml_cpu_op_profile_initialized = true;
++    ggml_cpu_op_profile_enabled = getenv("GGML_CPU_OP_PROFILE") != NULL;
++
++    if (ggml_cpu_op_profile_enabled) {
++        const char * skip_graphs = getenv("GGML_CPU_OP_PROFILE_SKIP_GRAPHS");
++        if (skip_graphs != NULL) {
++            ggml_cpu_op_profile_skip_graphs = (uint64_t) strtoull(skip_graphs, NULL, 10);
++        }
++        atexit(ggml_cpu_op_profile_print);
++    }
++}
++
++// Accumulate one finished CPU op
++static void ggml_cpu_op_profile_record(const struct ggml_tensor * tensor, int64_t time_us) {
++    if (!ggml_cpu_op_profile_enabled || !ggml_cpu_op_profile_active || tensor == NULL || tensor->op >= GGML_OP_COUNT || time_us < 0) {
++        return;
++    }
++
++    const struct ggml_tensor * src0 = tensor->src[0];
++    const struct ggml_tensor * src1 = tensor->src[1];
++    const int type = (src0 != NULL && src0->type < GGML_TYPE_COUNT) ? src0->type : GGML_TYPE_COUNT;
++
++    struct ggml_cpu_op_profile_entry * entry = &ggml_cpu_op_profile[tensor->op][type];
++
++    entry->calls++;
++    entry->time_us += (uint64_t) time_us;
++    entry->dst_elems += ggml_cpu_nelements_u64(tensor);
++
++    if ((tensor->op == GGML_OP_MUL_MAT || tensor->op == GGML_OP_MUL_MAT_ID) && src0 != NULL && src1 != NULL) {
++        const uint64_t src0_cols = (uint64_t) src0->ne[0];
++        const uint64_t dst_elems = ggml_cpu_nelements_u64(tensor);
++        entry->weight_apps += dst_elems * src0_cols;
++
++        if (src0->type == GGML_TYPE_Q1_0) {
++            entry->q1_groups += dst_elems * ((src0_cols + 127) / 128);
++        }
++    }
++}
++
+ #if defined(__ARM_ARCH)
+ struct ggml_arm_arch_features_type {
+     int sve_cnt;
+@@ -3040,11 +3142,19 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
+             continue;
+         }
+ 
++        // Only thread 0 records wall time for each graph node. Worker threads
++        // still participate in the op, but recording from all threads would
++        // double-count the same logical operation.
++        const int64_t profile_t0 = (state->ith == 0 && ggml_cpu_op_profile_enabled) ? ggml_time_us() : 0;
++        struct ggml_tensor * profile_node = node;
++
+         // TODO: move fused-op detection into ggml_graph_plan so fusion decisions are made once at planning time
+         // Try fused ops, fall back to normal compute
+         const int n_fused = ggml_cpu_try_fuse_ops(cgraph, node_n, &params, cplan);
+         if (n_fused > 0) {
+             node_n += n_fused;
++            profile_node = cgraph->nodes[node_n];
+         } else {
+             ggml_compute_forward(&params, node);
+         }
+@@ -3058,6 +3164,10 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
+         if (node_n + 1 < cgraph->n_nodes) {
+             ggml_barrier(state->threadpool);
+         }
++
++        if (state->ith == 0 && ggml_cpu_op_profile_enabled) {
++            ggml_cpu_op_profile_record(profile_node, ggml_time_us() - profile_t0);
++        }
+     }
+ 
+ #ifdef GGML_USE_OPENMP
+@@ -3293,6 +3403,13 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
+     GGML_ASSERT(cplan->n_threads > 0);
+     GGML_ASSERT(cplan->work_size == 0 || cplan->work_data != NULL);
+ 
++    // Count complete graph executions so the benchmark can skip setup/warm-up graphs
++    if (ggml_cpu_op_profile_enabled) {
++        ggml_cpu_op_profile_graphs++;
++        ggml_cpu_op_profile_active = ggml_cpu_op_profile_graphs > ggml_cpu_op_profile_skip_graphs;
++    }
++
+     int n_threads                               = cplan->n_threads;
+     struct ggml_threadpool * threadpool = cplan->threadpool;
+ 
+@@ -3754,6 +3869,8 @@ void ggml_cpu_init(void) {
+         ggml_free(ctx);
+     }
+ 
++    ggml_cpu_op_profile_init();
++
+     ggml_critical_section_start();
+ 
+     static bool is_first_call = true;

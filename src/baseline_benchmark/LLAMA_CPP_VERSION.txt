@@ -1,0 +1,3 @@
+repository=https://github.com/ggml-org/llama.cpp
+commit=1ec7ba0c14f33f17e980daeeda5f35b225d41994
+description=opencl: add q4_1 MoE for Adreno (#22856)
