@@ -1,0 +1,25 @@
+{
+  "name": "1bit LLM FPGA Dev",
+  "initializeCommand": "docker build --platform=linux/amd64 -t 1bit-llm-fpga-dev:latest -f .devcontainer/Dockerfile .",
+  "image": "1bit-llm-fpga-dev:latest",
+  "runArgs": [
+    "--name",
+    "1bit-llm-fpga-dev",
+    "--platform=linux/amd64"
+  ],
+  "remoteEnv": {
+    "LANG": "C.UTF-8",
+    "PATH": "/opt/riscv/bin:${containerEnv:PATH}"
+  },
+  "postCreateCommand": "./.devcontainer/post-create.sh",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "mshr-h.veriloghdl",
+        "ms-python.python",
+        "ms-python.black-formatter",
+        "ms-python.flake8"
+      ]
+    }
+  }
+}

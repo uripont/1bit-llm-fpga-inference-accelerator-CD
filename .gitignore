@@ -1,5 +1,6 @@
 external/
 models/
+neorv32-setups/
 results/*
 !results/baseline_benchmark/
 results/baseline_benchmark/*

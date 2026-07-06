@@ -11,3 +11,7 @@ Those models suggested an interesting hardware/software co-design direction: rep
 The course context was a NEORV32 hardware accelerator project. I wanted to explore whether a RISC-V control core (mandated by the course) plus a small custom datapath could be shaped around the structure of 1-bit-like LLM inference, to end up **considerably speeding up end-to-end throughput (average tokens/second).**
 
 This README records the initial motivation around April 2026. The actual project scope, experiments, baselines, and accelerator design choices are developed separately in the repository.
+
+## Lab Development Environment
+
+The NEORV32 and HDL toolchain setup is documented in [docs/lab-dev-container-setup.md](docs/lab-dev-container-setup.md). The project-local Dev Container is adapted from the official `Hardware-Forge/lab_DHWA` course setup and uses a unique container name to avoid conflicts with the standalone lab repository.
