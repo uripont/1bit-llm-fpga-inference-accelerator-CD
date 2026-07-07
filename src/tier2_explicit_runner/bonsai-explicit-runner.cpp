@@ -116,6 +116,7 @@ struct ModelView {
   uint64_t data_start = 0;
   std::unordered_map<std::string, MetaValue> meta;
   std::vector<TensorView> tensors;
+  std::unordered_map<std::string, size_t> tensor_index;
 };
 
 uint64_t align_to(uint64_t x, uint64_t alignment) {
@@ -199,6 +200,7 @@ ModelView load_model_view(const std::string & model_path) {
     for (uint32_t d = 0; d < ndims; d++) tensor.dims[d] = reader.read<uint64_t>();
     tensor.type = reader.read<uint32_t>();
     tensor.relative_offset = reader.read<uint64_t>();
+    model.tensor_index[tensor.name] = model.tensors.size();
     model.tensors.push_back(std::move(tensor));
   }
 
@@ -243,11 +245,10 @@ struct BackendMetrics {
 // TODO: attention_backend(layer, q, kv_cache) -> y
 // TODO: lm_head_backend(hidden) -> logits / argmax
 
-
 // ---------------------------------------------------------------------------
 // Bonsai/Qwen3 shape
 // from models/qwen3.cpp and Bonsai GGUF metadata
-// TODO: load from metadata, then assert Bonsai-1.7B expected dimensions
+// load from metadata, then assert Bonsai-1.7B expected dimensions
 
 struct ModelShape {
   uint32_t n_layer = 0;
@@ -259,6 +260,95 @@ struct ModelShape {
   uint32_t n_vocab = 0;
   float rms_eps = 0.0f;
 };
+
+const TensorView & require_tensor(const ModelView & model, const std::string & name) {
+  // Fail early if the GGUF does not contain the Qwen3 tensor we plan to use
+  auto it = model.tensor_index.find(name);
+  if (it == model.tensor_index.end()) throw std::runtime_error("missing tensor: " + name);
+  return model.tensors[it->second];
+}
+
+uint32_t require_meta_u32(const ModelView & model, const std::string & key) {
+  // Metadata type checks keep later shape arithmetic from silently using bad data.
+  auto it = model.meta.find(key);
+  if (it == model.meta.end()) throw std::runtime_error("missing metadata: " + key);
+  const auto * value = std::get_if<uint32_t>(&it->second);
+  if (!value) throw std::runtime_error("metadata has wrong type: " + key);
+  return *value;
+}
+float require_meta_f32(const ModelView & model, const std::string & key) {
+  auto it = model.meta.find(key);
+  if (it == model.meta.end()) throw std::runtime_error("missing metadata: " + key);
+  const auto * value = std::get_if<float>(&it->second);
+  if (!value) throw std::runtime_error("metadata has wrong type: " + key);
+  return *value;
+}
+
+std::string require_meta_string(const ModelView & model, const std::string & key) {
+  auto it = model.meta.find(key);
+  if (it == model.meta.end()) throw std::runtime_error("missing metadata: " + key);
+  const auto * value = std::get_if<std::string>(&it->second);
+  
+  if (!value) throw std::runtime_error("metadata has wrong type: " + key);
+  return *value;
+}
+
+std::string layer_tensor(uint32_t layer, const std::string & suffix) {
+  //llama.cpp names Qwen3 block tensors as blk.<layer>.<role>.weight
+  return "blk." + std::to_string(layer) + "." + suffix;
+}
+
+void require_dims(const TensorView & tensor, std::initializer_list<uint64_t> expected) {
+  // Shape checks encode the tensor contract copied from models/qwen3.cpp.
+  if (tensor.dims.size() != expected.size()) throw std::runtime_error("bad tensor rank: " + tensor.name);
+  size_t i = 0;
+  for (uint64_t dim : expected) {
+    if (tensor.dims[i++] != dim) throw std::runtime_error("bad tensor shape: " + tensor.name);
+  }
+}
+
+// Shape validation mirrors the required tensors in models/qwen3.cpp.
+ModelShape load_and_validate_shape(const ModelView & model) {
+  if (require_meta_string(model, "general.architecture") != "qwen3") {
+    throw std::runtime_error("expected qwen3 architecture");
+  }
+
+  ModelShape shape;
+  shape.n_layer = require_meta_u32(model, "qwen3.block_count");
+  shape.n_embd = require_meta_u32(model, "qwen3.embedding_length");
+  shape.n_ff = require_meta_u32(model, "qwen3.feed_forward_length");
+  shape.n_head = require_meta_u32(model, "qwen3.attention.head_count");
+  shape.n_head_kv = require_meta_u32(model, "qwen3.attention.head_count_kv");
+  shape.head_dim = require_meta_u32(model, "qwen3.attention.key_length");
+  shape.rms_eps = require_meta_f32(model, "qwen3.attention.layer_norm_rms_epsilon");
+  shape.n_vocab = static_cast<uint32_t>(require_tensor(model, "token_embd.weight").dims.at(1));
+
+  if (shape.n_layer != 28 || shape.n_embd != 2048 || shape.n_ff != 6144 ||
+      shape.n_head != 16 || shape.n_head_kv != 8 || shape.head_dim != 128) {
+    throw std::runtime_error("unexpected Bonsai-1.7B/Qwen3 dimensions");
+  }
+
+  require_dims(require_tensor(model, "token_embd.weight"), {shape.n_embd, shape.n_vocab});
+  require_dims(require_tensor(model, "output_norm.weight"), {shape.n_embd});
+
+  const uint64_t n_q = uint64_t(shape.n_head) * shape.head_dim;
+  const uint64_t n_kv = uint64_t(shape.n_head_kv) * shape.head_dim;
+  for (uint32_t layer = 0; layer < shape.n_layer; layer++) {
+    require_dims(require_tensor(model, layer_tensor(layer, "attn_norm.weight")), {shape.n_embd});
+    require_dims(require_tensor(model, layer_tensor(layer, "attn_q.weight")), {shape.n_embd, n_q});
+    require_dims(require_tensor(model, layer_tensor(layer, "attn_k.weight")), {shape.n_embd, n_kv});
+    require_dims(require_tensor(model, layer_tensor(layer, "attn_v.weight")), {shape.n_embd, n_kv});
+    require_dims(require_tensor(model, layer_tensor(layer, "attn_output.weight")), {n_q, shape.n_embd});
+    require_dims(require_tensor(model, layer_tensor(layer, "attn_q_norm.weight")), {shape.head_dim});
+    require_dims(require_tensor(model, layer_tensor(layer, "attn_k_norm.weight")), {shape.head_dim});
+    require_dims(require_tensor(model, layer_tensor(layer, "ffn_norm.weight")), {shape.n_embd});
+    require_dims(require_tensor(model, layer_tensor(layer, "ffn_gate.weight")), {shape.n_embd, shape.n_ff});
+    require_dims(require_tensor(model, layer_tensor(layer, "ffn_up.weight")), {shape.n_embd, shape.n_ff});
+    require_dims(require_tensor(model, layer_tensor(layer, "ffn_down.weight")), {shape.n_ff, shape.n_embd});
+  }
+
+  return shape;
+}
 
 // ---------------------------------------------------------------------------
 // One-token forward path
@@ -292,6 +382,14 @@ public:
     print_meta("qwen3.attention.head_count_kv");
     print_meta("qwen3.attention.key_length");
     print_meta("qwen3.attention.layer_norm_rms_epsilon");
+    std::cout << "validated_shape"
+              << " layers=" << shape_.n_layer
+              << " hidden=" << shape_.n_embd
+              << " ffn=" << shape_.n_ff
+              << " heads=" << shape_.n_head
+              << " kv_heads=" << shape_.n_head_kv
+              << " head_dim=" << shape_.head_dim
+              << " vocab=" << shape_.n_vocab << "\n";
 
     std::cout << "tensor_count=" << model_.tensors.size() << "\n";
     for (const TensorView & tensor : model_.tensors) {
@@ -360,7 +458,7 @@ int main(int argc, char ** argv)
 
   try {
     bonsai_tier2::ModelView model = bonsai_tier2::load_model_view(config.model_path);
-    bonsai_tier2::ModelShape shape;
+    bonsai_tier2::ModelShape shape = bonsai_tier2::load_and_validate_shape(model);
     bonsai_tier2::Runner runner(std::move(model), shape);
 
     // Control runner behavior, based on config flags

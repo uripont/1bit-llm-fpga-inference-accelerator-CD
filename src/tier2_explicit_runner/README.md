@@ -12,6 +12,23 @@ c++ -std=c++17 -O3 -Wall -Wextra -Wpedantic \
   -o /tmp/bonsai-explicit-runner
 ```
 
+The default model path is shared with Tier 1:
+
+```text
+models/bonsai-1.7b-gguf/Bonsai-1.7B-Q1_0.gguf
+```
+
+If the GGUF is not present yet, run the Tier 1 setup first:
+
+```sh
+src/tier1_llama_cpp_benchmark/setup.sh
+```
+
+That script downloads `Bonsai-1.7B-Q1_0.gguf` from
+[`prism-ml/Bonsai-1.7B-gguf`](https://huggingface.co/prism-ml/Bonsai-1.7B-gguf)
+or links an existing local copy when `MODEL_SOURCE=/path/to/Bonsai-1.7B-Q1_0.gguf`
+is provided.
+
 Current flags:
 
 - `--model path`: set the Bonsai GGUF path.
