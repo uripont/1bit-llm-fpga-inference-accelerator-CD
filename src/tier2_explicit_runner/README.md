@@ -70,6 +70,26 @@ Token-generation trace:
 
 The trace keeps a KV cache across the listed token ids, then prints `generated_token` and `top_token` rows from the LM-head logits for each decode step. 
 
+Benchmark and save Tier 2 decode metrics:
+
+```sh
+python3 src/tier2_explicit_runner/run-benchmark.py
+```
+
+The benchmark builds `bonsai-explicit-runner.cpp`, runs `--check-q1`, then runs
+decode traces for increasing explicit token-id prefixes. It writes raw logs and
+the summary CSV under:
+
+```text
+results/tier2_explicit_runner/full/
+```
+
+The main summary file is:
+
+```text
+results/tier2_explicit_runner/full/decode-summary.csv
+```
+
 llama.cpp parity checks:
 
 ```sh

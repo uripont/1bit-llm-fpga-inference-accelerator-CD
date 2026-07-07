@@ -138,5 +138,64 @@ Tier 1 is the best reference for real CPU runtime behavior and understanding whi
 
 The Tier 2 runner is kept under `src/tier2_explicit_runner/`. The main source file is `src/tier2_explicit_runner/bonsai-explicit-runner.cpp`, and the build/run commands are documented in `src/tier2_explicit_runner/README.md`. This tier is used to inspect the GGUF tensors and extract explicit operation metrics from a self-contained C++ Bonsai forward (decode) pass, including Q1_0 matrix-vector call counts, rows, dot-product elements, groups of 128 packed weights, attention calls,...
 
-#pagebreak()
+== Benchmark setup
 
+#list(
+
+  [Benchmark script: `src/tier2_explicit_runner/run-benchmark.py`.],
+  [Input: explicit token ids, passed with `--tokens`, so this tier does not depend on tokenizer behavior.],
+)
+
+The result files for this tier are:
+
+#list(
+  [`results/tier2_explicit_runner/full/decode-summary.csv`],
+  [`results/tier2_explicit_runner/full/check-q1.log`],
+  [`results/tier2_explicit_runner/full/tokens_1.log`],
+  [`results/tier2_explicit_runner/full/tokens_2.log`],
+  [`results/tier2_explicit_runner/full/tokens_4.log`],
+)
+
+The full Tier 2 run can be reproduced with:
+
+```sh
+python3 src/tier2_explicit_runner/run-benchmark.py
+```
+
+== Decode metric results
+
+#table(
+  columns: (0.75fr, 0.8fr, 1.0fr, 1.0fr, 1.0fr, 1.05fr, 1.0fr),
+  stroke: (x, y) => if y == 0 { (bottom: 0.8pt) } else { none },
+  inset: (x: 3pt, y: 3pt),
+  align: (left, right, right, right, right, right, right),
+  table.header(
+    [Tokens],
+    [Layers],
+    [Q1 calls],
+    [Q1 dot elems],
+    [Q1 groups],
+    [Attn. calls],
+    [Attn. MACs],
+  ),
+  [1], [28],  [197], [1.720B], [13.437M], [28],  [0.115M],
+  [2], [56],  [394], [3.440B], [26.874M], [56],  [0.344M],
+  [4], [112], [788], [6.880B], [53.747M], [112], [1.147M],
+)
+
+For each decoded token, the full Bonsai path performs:
+
+#list(
+  [28 transformer layers.],
+  [196 transformer Q1_0 matrix-vector backend calls, plus 1 Q1_0 LM-head call.],
+  [1,719,904,256 total Q1_0 dot-product elements.],
+  [13,436,752 groups of 128 packed Q1_0 weights.],
+  [28 attention backend calls.],
+  [141 RMSNorm operations, 56 residual adds, and 28 SiLU-gate products.],
+)
+
+The Q1_0 work is almost perfectly constant per decoded token because every new token runs through the same fixed Bonsai weights. The attention count also scales with layers and tokens, but the amount of attention work per token increases with the current KV-cache length. In the 1-token run, total attention score/value work is 114,688 MACs. In the 4-token run, total attention score/value work is 1,146,880 MACs, because the later tokens attend over a longer stored history.
+
+== Tier 2 conclusions
+
+The main result from this tier is a bridge from the full `llama.cpp` timing benchmark to hardware-sized kernels: the Q1_0 accelerator should be evaluated on packed 128-weight groups and row-wise dot products, while the attention accelerator should be evaluated on KV-cache traversal and per-head score/value reductions as context grows. The authored self-contained runner also provides a simpler, clearer source view of the Bonsai inference path, from which to design the hardware accelerator and its interface to the memory hierarchy.

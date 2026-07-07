@@ -9,3 +9,12 @@ results/baseline_benchmark/full/*
 !results/baseline_benchmark/full/prefill-summary.csv
 !results/baseline_benchmark/full/decode-summary.csv
 !results/baseline_benchmark/full/pl_1_pp_32768_tg_32.log
+!results/tier2_explicit_runner/
+results/tier2_explicit_runner/*
+!results/tier2_explicit_runner/full/
+results/tier2_explicit_runner/full/*
+!results/tier2_explicit_runner/full/decode-summary.csv
+!results/tier2_explicit_runner/full/check-q1.log
+!results/tier2_explicit_runner/full/tokens_1.log
+!results/tier2_explicit_runner/full/tokens_2.log
+!results/tier2_explicit_runner/full/tokens_4.log

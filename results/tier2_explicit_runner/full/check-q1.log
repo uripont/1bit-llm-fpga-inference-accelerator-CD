@@ -1,0 +1,5 @@
+check_q1 tensor=blk.0.attn_q.weight row=7 cols=2048 row_bytes=288 groups_128=16
+check_q1 ref_dot=-0.503881 direct_dot=-0.503881 abs_err=0.000000
+check_q1 matvec_rows=2048 matvec_dot_elements=4194304 matvec_groups_128=32768 matvec_max_ref_err=0.000000
+check_q1=ok
+backend_metrics decode_tokens=0 decode_layers=0 decode_rms_norms=0 decode_q1_backend_calls=0 decode_attention_backend_calls=0 decode_residual_adds=0 decode_silu_gate_products=0 decode_lm_head_calls=0 transformer_q1_matvec_calls=1 transformer_q1_rows=2048 transformer_q1_dot_elements=4194304 transformer_q1_groups_128=32768 attention_calls=0 attention_score_mac=0 attention_value_mac=0 lm_head_q1_matvec_calls=0 lm_head_q1_rows=0 lm_head_q1_dot_elements=0 lm_head_q1_groups_128=0
