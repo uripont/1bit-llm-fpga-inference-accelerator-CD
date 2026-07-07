@@ -17,6 +17,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -416,6 +417,11 @@ struct DecodeMetrics {
   uint64_t lm_head_calls = 0;
 };
 
+struct LayerCache {
+  std::vector<std::vector<float>> keys;
+  std::vector<std::vector<float>> values;
+};
+
 // TODO: lm_head_backend(hidden) -> logits / argmax
 
 // ---------------------------------------------------------------------------
@@ -536,7 +542,7 @@ ModelShape load_and_validate_shape(const ModelView & model) {
 class Runner {
 public:
   Runner(ModelView model, ModelShape shape)
-      : model_(std::move(model)), shape_(shape) {}
+      : model_(std::move(model)), shape_(shape), kv_cache_(shape.n_layer) {}
 
   void inspect() const {
     // Report the Bonsai GGUF tensor count and each tensor's name, dimensions, and type.
@@ -586,8 +592,6 @@ public:
     decode_.silu_gate_products += shape_.n_layer;
     decode_.lm_head_calls++;
 
-    metrics_.attention_calls += shape_.n_layer;
-
     std::cout << "trace_decode token=" << token
               << " layers=" << shape_.n_layer
               << " hidden=" << shape_.n_embd
@@ -605,13 +609,7 @@ public:
       const std::vector<float> q = q1_matvec_backend(layer_tensor(layer, "attn_q.weight"), hidden, metrics_.transformer_q1, &layer_q1);
       const std::vector<float> k = q1_matvec_backend(layer_tensor(layer, "attn_k.weight"), hidden, metrics_.transformer_q1, &layer_q1);
       const std::vector<float> v = q1_matvec_backend(layer_tensor(layer, "attn_v.weight"), hidden, metrics_.transformer_q1, &layer_q1);
-      (void)q;
-      (void)k;
-      (void)v;
-
-      // TODO: attention
-      // temporally using right output shape for the Q1 output projection
-      const std::vector<float> attention_out(shape_.n_embd, 0.0f);
+      const std::vector<float> attention_out = attention_backend(layer, q, k, v);
       const std::vector<float> projected_attention = q1_matvec_backend(layer_tensor(layer, "attn_output.weight"), attention_out, metrics_.transformer_q1, &layer_q1);
       const std::vector<float> ffn_gate = q1_matvec_backend(layer_tensor(layer, "ffn_gate.weight"), hidden, metrics_.transformer_q1, &layer_q1);
       const std::vector<float> ffn_up = q1_matvec_backend(layer_tensor(layer, "ffn_up.weight"), hidden, metrics_.transformer_q1, &layer_q1);
@@ -704,6 +702,67 @@ public:
   const DecodeMetrics & decode_metrics() const { return decode_; }
 
 private:
+
+  std::vector<float> attention_backend(uint32_t layer,
+                                       const std::vector<float> & q,
+                                       const std::vector<float> & k,
+                                       const std::vector<float> & v) {
+    // Qwen3 uses full query heads and fewer KV heads
+    if (q.size() != uint64_t(shape_.n_head) * shape_.head_dim) throw std::runtime_error("attention q size mismatch");
+    if (k.size() != uint64_t(shape_.n_head_kv) * shape_.head_dim) throw std::runtime_error("attention k size mismatch");
+    if (v.size() != uint64_t(shape_.n_head_kv) * shape_.head_dim) throw std::runtime_error("attention v size mismatch");
+
+    // Decode attention appends this token's K/V, then attends over the layer cache
+    LayerCache & cache = kv_cache_.at(layer);
+    cache.keys.push_back(k);
+    cache.values.push_back(v);
+    const uint64_t context = cache.keys.size();
+
+    // core MAC counts for the attention accelerator target
+    metrics_.attention_calls++;
+    metrics_.attention_score_mac += uint64_t(shape_.n_head) * context * shape_.head_dim;
+    metrics_.attention_value_mac += uint64_t(shape_.n_head) * context * shape_.head_dim;
+
+    std::vector<float> out(uint64_t(shape_.n_head) * shape_.head_dim, 0.0f);
+    std::vector<float> scores(context);
+    const float scale = 1.0f / std::sqrt(float(shape_.head_dim));
+
+    for (uint32_t head = 0; head < shape_.n_head; head++) {
+      // Grouped-query attention maps multiple query heads to one KV head
+      const uint32_t kv_head = head * shape_.n_head_kv / shape_.n_head;
+      float max_score = -std::numeric_limits<float>::infinity();
+
+      // Score pass: dot this query head against every cached key for the KV head
+      for (uint64_t pos = 0; pos < context; pos++) {
+        float score = 0.0f;
+        for (uint32_t d = 0; d < shape_.head_dim; d++) {
+          score += q[uint64_t(head) * shape_.head_dim + d] *
+                   cache.keys[pos][uint64_t(kv_head) * shape_.head_dim + d];
+        }
+        scores[pos] = score * scale;
+        max_score = std::max(max_score, scores[pos]);
+      }
+
+      // Softmax pass, subtracting max_score for numerical stability
+      float denom = 0.0f;
+      for (uint64_t pos = 0; pos < context; pos++) {
+        scores[pos] = std::exp(scores[pos] - max_score);
+        denom += scores[pos];
+      }
+      if (denom == 0.0f) throw std::runtime_error("attention softmax denominator is zero");
+
+      // Value pass: weighted sum of cached values produces one output head
+      for (uint64_t pos = 0; pos < context; pos++) {
+        const float weight = scores[pos] / denom;
+        for (uint32_t d = 0; d < shape_.head_dim; d++) {
+          out[uint64_t(head) * shape_.head_dim + d] +=
+              weight * cache.values[pos][uint64_t(kv_head) * shape_.head_dim + d];
+        }
+      }
+    }
+    return out;
+  }
+
   std::vector<float> q1_matvec_backend(const std::string & tensor_name,
                                        const std::vector<float> & x,
                                        Q1Metrics & total,
@@ -744,6 +803,7 @@ private:
   ModelShape shape_;
   BackendMetrics metrics_;
   DecodeMetrics decode_;
+  std::vector<LayerCache> kv_cache_;
 };
 
 
