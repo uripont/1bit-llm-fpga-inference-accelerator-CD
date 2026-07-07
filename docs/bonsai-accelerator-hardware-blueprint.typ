@@ -25,6 +25,19 @@
   body,
 )
 
+#let engine-frame(title, body, fill: rgb("f8fafc")) = box(
+  width: 100%,
+  inset: 7pt,
+  radius: 2pt,
+  stroke: 0.8pt + rgb("475569"),
+  fill: fill,
+)[
+  *#title*
+
+  #v(0.45em)
+  #body
+]
+
 #let control-fill = rgb("eef2ff")
 #let compute-fill = rgb("ecfdf5")
 #let stream-fill = rgb("fff7ed")
@@ -36,7 +49,7 @@
 #let biarrow = text(size: 13pt)[<=>]
 
 #let fsm-table(rows) = table(
-  columns: (0.9fr, 2.85fr, 1.0fr, 1.0fr),
+  columns: (0.9fr, 2.0fr, 1.2fr, 1.0fr),
   stroke: (x, y) => if y == 0 { (bottom: 0.8pt) } else { none },
   table.header([State], [Action / outputs], [Condition], [Next state]),
   ..rows,
@@ -278,19 +291,19 @@ With these, the high-level design of the accelerator is complete, without premat
   `STREAM_ERROR`],
   [`ROUTE_INPUT`], [Use descriptor context to route the accepted word into the selected local-buffer bank and increment payload count.], [more input expected \ or \
   payload complete \  or \
-  buffer unavailable], [`ACCEPT_INPUT` \ \ or \
-  `FLUSH` \ \ or \
+  buffer unavailable], [`ACCEPT_INPUT` \ or \
+  `FLUSH` \  or \
   `WAIT_SPACE`],
   [`WAIT_SPACE`], [Un-assert `in_ready` while the target FIFO or local-buffer bank cannot accept another word.], [space available \ \ or \
   protocol fault], [`ACCEPT_INPUT` or `ROUTE_INPUT` \ or \
   `STREAM_ERROR`],
   [`SERVE_OUTPUT`], [Read result words from output buffer/FIFO and assert `out_valid` while data is available.], [`out_valid && out_ready`, more data \ or \
   last result word \ or \
-  underflow], [stay \ \ \ or \
+  underflow], [stay \ \ or \
   `FLUSH` \ or \
   `STREAM_ERROR`],
   [`FLUSH`], [Close packet boundary, check `in_last`/`out_last`, and finalize payload/result counters.], [packet consistent \ or \
-  length/last mismatch], [`STREAM_DONE` \ \ or \
+  length/last mismatch], [`STREAM_DONE` \ or \
   `STREAM_ERROR`],
   [`STREAM_DONE`], [Expose stream completion to `accel_top` and hold completion until acknowledged.], [top acknowledges], [`IDLE`],
   [`STREAM_ERROR`], [Latch overflow, underflow, unexpected `last`, or length mismatch and expose fault to `accel_top`.], [error cleared], [`IDLE`],
@@ -304,7 +317,7 @@ The local buffers are a shared staging area, and specifically not a third accele
   [`IDLE`], [No active ownership change, valid bits and pointers retain their current values.], [fill request \ or \
   engine read request \ or \
   clear request], [`FILL_BANK` \ or \
-  `SERVE_ENGINE` \ \  or \
+  `SERVE_ENGINE` \  or \
   `CLEAR_BANK`],
   [`FILL_BANK`], [Accept writes from `stream_frontend` into the selected bank and advance write pointer.], [bank filled/payload complete \ or \
   overflow/conflict], [`MARK_READY` \ \ or \
@@ -337,4 +350,180 @@ In terms of counters, the CPU should be able to snapshot the following events fo
   [`cpu_blocked_cycles`: cycles measured for blocking software interaction, in Proposal B evaluation.],
 )
 
-This completes the top-level blueprint at the SoC level and its contract and control interface. Of course, this is to guide the design process, and can be refined as the design progresses. The next sections can specialize the two rightmost services separately: first the Q1_0 matvec engine for Proposal A, then the attention/KV stream engine and FIFO/memory-management candidate choices for Proposal B.
+This completes the top-level blueprint at the SoC level and its contract and control interface. Of course, this is to guide the design process, and can be refined as the design progresses. The next sections specialize the two rightmost services separately: first the Q1_0 matvec engine for Proposal A, then the attention/KV stream engine and FIFO/memory-management candidate choices for Proposal B.
+
+#pagebreak()
+
+= Proposal A: `q1_matvec_engine`
+
+Proposal A is the compute-first tensor accelerator. The target primitive is Q1_0 matrix-vector multiplication over fixed-weight rows, because this is the repeated backend used by Bonsai linear layers. Decode naturally uses one matrix-vector product per layer operation for the current token. Prefill uses the same linear transforms repeated over prompt positions or batches, so this engine is a suitable board-sized primitive for extrapolating Bonsai impact from Tier 3 measurements.
+
+The engine consumes local-buffered activation tiles and packed Q1_0 weight groups. Each group contains sign bits and a scale. The hardware performs sign-controlled add/sub reductions, applies the scale, accumulates the row result, and writes one output element.
+
+#figure(
+  align(center)[
+    #engine-frame("q1_matvec_engine", fill: compute-fill)[
+      #grid(
+        columns: (1fr, auto, 1fr, auto, 1fr, auto, 1fr, auto, 1fr),
+        column-gutter: 0.5em,
+        row-gutter: 0.5em,
+        align: center + horizon,
+
+        block([*Local input bank*\
+        activation tile\
+        x[group]], fill: stream-fill),
+        arrow,
+        block([*Q1 group reader*\
+        packed signs\
+        scale\
+        row/group idx], fill: compute-fill),
+        arrow,
+        block([*Sign lanes*\
+        add/sub\
+        partial sums], fill: compute-fill),
+        arrow,
+        block([*Reduction + scale*\
+        row accumulator\
+        saturation policy (TBD)], fill: compute-fill),
+        arrow,
+        block([*Output writer*\
+        y[row]\
+        done flag], fill: stream-fill),
+      )
+    ]
+  ],
+  caption: [Zoom-in block diagram for `q1_matvec_engine`.],
+)
+
+== Q1_0 Matvec FSM
+
+This FSM is local to `q1_matvec_engine`. It assumes `accel_top` already selected the engine and that local buffers expose the activation and packed-weight payloads through the shared engine/data contract.
+
+#fsm-table((
+  [`IDLE`], [Keep `engine_busy = 0`; wait for the top-level launch handshake.], [`engine_start` with `engine_kind = q1_matvec`], [`LOAD_DESC`],
+  [`LOAD_DESC`], [Latch rows, columns/group count, buffer selectors, and output mode from the command descriptor.], [descriptor accepted \ or \
+  descriptor invalid], [`LOAD_X` \ or \
+  `ERROR`],
+  [`LOAD_X`], [Request or select the activation tile from `local_buffer_bank`.], [activation tile ready \ or \
+  buffer fault], [`INIT_ROW` \ or \
+  `ERROR`],
+  [`INIT_ROW`], [Clear row accumulator and initialize `group_idx` for the current output row.], [row initialized], [`READ_GROUP`],
+  [`READ_GROUP`], [Read packed signs and scale for the current row/group.], [group word valid \ or \
+  input unavailable], [`DOT_GROUP` \ or \
+  `WAIT_INPUT`],
+  [`WAIT_INPUT`], [Hold row/group counters while waiting for buffer data.], [group word valid \ or \
+  timeout/protocol fault], [`DOT_GROUP` \ or \
+  `ERROR`],
+  [`DOT_GROUP`], [Use sign bits to select add/sub operations over the activation group and produce a group partial sum.], [partial sum ready], [`ACCUM_ROW`],
+  [`ACCUM_ROW`], [Apply group scale and accumulate into the row accumulator.], [more groups \ or \
+  row complete], [`READ_GROUP` \ or \
+  `WRITE_ROW`],
+  [`WRITE_ROW`], [Write the completed row result to the output buffer path.], [output accepted \ or \
+  output blocked], [`NEXT_ROW` \ or \
+  `WAIT_OUTPUT`],
+  [`WAIT_OUTPUT`], [Hold row result until output space is available.], [output accepted \ or \
+  protocol fault], [`NEXT_ROW` \ or \
+  `ERROR`],
+  [`NEXT_ROW`], [Advance row counter and clear per-row state when more output rows remain.], [more rows \ or \
+  all rows complete], [`INIT_ROW` \ or \
+  `DONE`],
+  [`DONE`], [Assert `engine_done`, clear `engine_busy`, and expose engine-local counters.], [top acknowledges], [`IDLE`],
+  [`ERROR`], [Assert `engine_error`, clear `engine_busy`, and latch the local failure reason.], [top clears command], [`IDLE`],
+))
+
+
+= Proposal B: `attn_kv_engine`
+
+Proposal B is the stream and memory-management path. The attention/KV engine is framed this way because long-context cost is dominated by repeatedly moving and traversing K/V history, even though the service can still implement full attention semantics.
+
+The intended service loads Q for a head, streams K over the context window to compute QK scores, normalizes the scores with a later-chosen softmax or online-softmax approximation or implementation, streams V, accumulates the weighted output, and writes the attention result.
+
+#figure(
+  align(center)[
+    #engine-frame("attn_kv_engine", fill: stream-fill)[
+      #grid(
+        columns: (1fr, auto, 1fr, auto, 1fr, auto, 1fr, auto, 1fr),
+        column-gutter: 0.5em,
+        row-gutter: 0.5em,
+        align: center + horizon,
+
+        block([*Q buffer*\
+        current head\
+        head_dim], fill: stream-fill),
+        arrow,
+        block([*K stream reader*\
+        context index\
+        valid/ready], fill: stream-fill),
+        arrow,
+        block([*QK score unit*\
+        dot product\
+        score state], fill: compute-fill),
+        arrow,
+        block([*Normalizer*\
+        softmax/online\
+        denominator state], fill: compute-fill),
+        arrow,
+        block([*V stream reader*\
+        weighted output\
+        accumulation\
+        output vector], fill: stream-fill),
+      )
+    ]
+  ],
+  caption: [Zoom-in block diagram for `attn_kv_engine`.],
+)
+
+== Attention/KV Engine FSM
+
+It shares the same engine launch/completion contract as the Q1_0 engine, but its internal phases are organized around Q loading, K traversal, score normalization, V traversal, and output writeback.
+
+#fsm-table((
+  [`IDLE`], [Keep `engine_busy = 0`; wait for the top-level launch handshake.], [`engine_start` with `engine_kind = attn_kv`], [`LOAD_DESC`],
+  [`LOAD_DESC`], [Latch head count, KV-head mapping, head dimension, context length, buffer selectors, and output mode.], [descriptor accepted \ or \
+  descriptor invalid], [`LOAD_Q` \ or \
+  `ERROR`],
+  [`LOAD_Q`], [Load or select Q data for the current head from the local buffer path.], [Q ready \ or \
+  buffer fault], [`INIT_HEAD` \ or \
+  `ERROR`],
+  [`INIT_HEAD`], [Clear score/normalization state, output accumulator, and context counters for the current head.], [head initialized], [`SCAN_K`],
+  [`SCAN_K`], [Stream K data over the context window and compute QK scores.], [more K positions \ or \
+  all K scored \ or \
+  stream fault], [`SCAN_K` \ or \
+  `NORMALIZE` \ or \
+  `ERROR`],
+  [`NORMALIZE`], [Normalize scores using the selected softmax or online-normalization method.], [normalization complete \ or \
+  numeric/protocol fault], [`SCAN_V` \ or \
+  `ERROR`],
+  [`SCAN_V`], [Stream V data paired with normalized scores and accumulate the weighted output vector.], [more V positions \ or \
+  output complete \ or \
+  stream fault], [`SCAN_V` \ or \
+  `WRITE_OUT` \ or \
+  `ERROR`],
+  [`WRITE_OUT`], [Write the completed attention output vector to the output buffer path.], [output accepted \ or \
+  output blocked], [`NEXT_HEAD` \ or \
+  `WAIT_OUTPUT`],
+  [`WAIT_OUTPUT`], [Hold output data until the output buffer/FIFO can accept it.], [output accepted \ or \
+  protocol fault], [`NEXT_HEAD` \ or \
+  `ERROR`],
+  [`NEXT_HEAD`], [Advance head counter and select the next Q/K/V slice when more heads remain.], [more heads \ or \
+  all heads complete], [`LOAD_Q` \ or \
+  `DONE`],
+  [`DONE`], [Assert `engine_done`, clear `engine_busy`, and expose attention/KV counters.], [top acknowledges], [`IDLE`],
+  [`ERROR`], [Assert `engine_error`, clear `engine_busy`, and latch the local failure reason.], [top clears command], [`IDLE`],
+))
+
+== Engine-Level Evaluation Counters
+
+Both engine FSMs should feed the shared `counter_block`, but the report should keep their counters conceptually separate:
+
+#list(
+  [`q1_group_cycles` and `q1_output_rows`: compute work completed by the Q1_0 engine.],
+  [`q1_wait_input_cycles` and `q1_wait_output_cycles`: stalls caused by local-buffer or stream availability.],
+  [`attn_k_positions` and `attn_v_positions`: streamed context work completed by the attention/KV engine.],
+  [`attn_score_cycles`, `attn_norm_cycles`, and `attn_value_cycles`: phase-level attention timing, for extrapolation.],
+  [`attn_wait_stream_cycles`: cycles where attention is ready but the KV stream or output path is not.],
+)
+
+= Summary
+
+This document has defined the first iteration of the top-level architecture, submodules, signal groups, and control FSMs for the proposed Bonsai accelerator. We want to focus on gaining performance in both the Q1_0 matvec backend and the attention/KV long-context path, measuring with precision in simulation several set-ups, to then be able to extrapolate the impact of the accelerator on Bonsai-1.7B Q1_0 inference, which was the original motivation for this work despite the constraints of the course board. The next step is to implement the RTL for the top-level shell and both engines starting from this architecture, to validate if any assumptions need to be revised, or if the proposed FSMs and signal groups are sufficient to support this initially intended services.
