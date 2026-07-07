@@ -5,12 +5,16 @@
 //   - external/llama.cpp/src/models/qwen3.cpp              Qwen3 block graph
 //   - external/llama.cpp/src/llama-kv-cache.cpp             KV-cache storage/update path
 //   - external/llama.cpp/ggml/src/ggml-common.h            quantized block layouts
-//   - external/llama.cpp/ggml/src/ggml-cpu/quants.c        Q1_0 CPU quant math
+//   - external/llama.cpp/ggml/src/ggml-quants.c            Q1_0 dequantization
+//   - external/llama.cpp/ggml/src/ggml-cpu/quants.c        Q1_0 CPU dot math
 //   - external/llama.cpp/ggml/src/ggml-cpu/ggml-cpu.c      CPU graph execution
 //   - external/llama.cpp/ggml/src/ggml-blas/ggml-blas.cpp  BLAS matmul path used in Tier 1
 
 #include <cstdint>
+#include <cmath>
+#include <cstring>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -21,6 +25,13 @@
 #include <vector>
 
 namespace bonsai_tier2 {
+
+// Constants for GGUF tensor types and Q1_0 block layout for Bonsai family (avoid hardcoding on implementation)
+static constexpr uint32_t GGUF_TYPE_F32 = 0;
+static constexpr uint32_t GGUF_TYPE_F16 = 1;
+static constexpr uint32_t GGUF_TYPE_Q1_0 = 41;
+static constexpr uint32_t QK1_0 = 128;
+static constexpr uint32_t Q1_0_BLOCK_BYTES = sizeof(uint16_t) + QK1_0 / 8;
 
 struct RunConfig {
   std::string model_path = "models/bonsai-1.7b-gguf/Bonsai-1.7B-Q1_0.gguf";
@@ -123,9 +134,9 @@ uint64_t align_to(uint64_t x, uint64_t alignment) {
   return ((x + alignment - 1) / alignment) * alignment;
 }
 std::string type_name(uint32_t type) {
-  if (type == 0) return "f32";
-  if (type == 1) return "f16";
-  if (type == 41) return "q1_0";
+  if (type == GGUF_TYPE_F32) return "f32";
+  if (type == GGUF_TYPE_F16) return "f16";
+  if (type == GGUF_TYPE_Q1_0) return "q1_0";
   return "type_" + std::to_string(type);
 }
 std::string meta_to_string(const MetaValue & value) {
@@ -222,14 +233,123 @@ ModelView load_model_view(const std::string & model_path) {
 }
 
 // Q1_0 format helpers
-// anchors: ggml-common.h, ggml-cpu/quants.c.
-// TODO: add Q1_0 constants, row sizing, row dequant check
+// anchors: ggml-common.h, ggml-quants.c, ggml-cpu/quants.c.
 struct Q1Metrics {
   uint64_t calls = 0;
   uint64_t rows = 0;
   uint64_t dot_elements = 0;
   uint64_t groups_128 = 0;
 };
+
+float fp16_to_f32(uint16_t h) {
+  // Q1_0 stores each block scale as ggml_half before its 128 packed sign bits.
+  const uint32_t sign = (uint32_t(h) & 0x8000u) << 16;
+  uint32_t exp = (uint32_t(h) >> 10) & 0x1fu;
+  uint32_t mant = uint32_t(h) & 0x03ffu;
+  uint32_t out = 0;
+
+  if (exp == 0) {
+    // Half zero: exponent is zero, so the mantissa needs special handling
+    if (mant == 0) {
+      // Signed zero maps directly to the float sign bit
+      out = sign;
+    } else {
+      // Normalize by shifting until the hidden leading bit appears
+      exp = 1;
+      while ((mant & 0x0400u) == 0) {
+        mant <<= 1;
+        exp--;
+      }
+      // Drop the hidden leading bit and re-bias the exponent from half to float
+      mant &= 0x03ffu;
+      out = sign | ((exp + 127 - 15) << 23) | (mant << 13);
+    }
+  } else if (exp == 31) {
+    // Half Inf/NaN: preserve the payload bits while expanding to float format
+    out = sign | 0x7f800000u | (mant << 13);
+  } else {
+    // Normal half: keep sign/mantissa and change exponent bias from 15 to 127
+    out = sign | ((exp + 127 - 15) << 23) | (mant << 13);
+  }
+
+  float value = 0.0f;
+  std::memcpy(&value, &out, sizeof(value));
+  return value;
+}
+
+uint64_t q1_0_row_size(uint64_t cols) {
+  // GGML Q1_0 rows are a sequence of block_q1_0 groups, each covering 128 columns
+  if (cols % QK1_0 != 0) throw std::runtime_error("Q1_0 row is not block-aligned");
+  return (cols / QK1_0) * Q1_0_BLOCK_BYTES;
+}
+
+std::vector<uint8_t> read_q1_0_row(const ModelView & model, const TensorView & tensor, uint64_t row) {
+  if (tensor.type != GGUF_TYPE_Q1_0) throw std::runtime_error("tensor is not Q1_0: " + tensor.name);
+  if (tensor.dims.size() != 2) throw std::runtime_error("Q1_0 row read expects rank-2 tensor: " + tensor.name);
+  
+  const uint64_t cols = tensor.dims[0];
+  const uint64_t rows = tensor.dims[1];
+  if (row >= rows) throw std::runtime_error("Q1_0 row index out of range: " + tensor.name);
+
+  const uint64_t row_bytes = q1_0_row_size(cols);
+  std::vector<uint8_t> bytes(row_bytes);
+  std::ifstream file(model.path, std::ios::binary);
+
+  if (!file) throw std::runtime_error("cannot reopen model: " + model.path);
+  file.seekg(static_cast<std::streamoff>(tensor.absolute_offset + row * row_bytes));
+  file.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+  if (!file) throw std::runtime_error("could not read Q1_0 row: " + tensor.name);
+  return bytes;
+}
+
+std::vector<float> dequantize_q1_0_row(const std::vector<uint8_t> & row, uint64_t cols) {
+  if (row.size() != q1_0_row_size(cols)) throw std::runtime_error("bad Q1_0 row byte count");
+
+  std::vector<float> out(cols);
+  const uint8_t * block = row.data();
+  for (uint64_t base = 0; base < cols; base += QK1_0, block += Q1_0_BLOCK_BYTES) {
+    // Each block begins with a half scale, followed by 16 bytes of packed sign bits
+    uint16_t scale_bits = 0;
+    std::memcpy(&scale_bits, block, sizeof(scale_bits));
+    const float scale = fp16_to_f32(scale_bits);
+    const uint8_t * signs = block + sizeof(scale_bits);
+
+    for (uint32_t j = 0; j < QK1_0; j++) {
+      // One bit selects +scale or -scale for the corresponding column
+      const uint8_t bit = (signs[j >> 3] >> (j & 7)) & 1u;
+      out[base + j] = bit ? scale : -scale;
+    }
+  }
+  return out;
+}
+
+float dot_q1_0_row_f32(const std::vector<uint8_t> & row, const std::vector<float> & x) {
+  if (row.size() != q1_0_row_size(x.size())) throw std::runtime_error("bad Q1_0 row/input size");
+
+  float sum = 0.0f;
+  const uint8_t * block = row.data();
+  for (uint64_t base = 0; base < x.size(); base += QK1_0, block += Q1_0_BLOCK_BYTES) {
+    // Same Q1_0 layout as dequantize_q1_0_row()
+    uint16_t scale_bits = 0;
+    std::memcpy(&scale_bits, block, sizeof(scale_bits));
+    const float scale = fp16_to_f32(scale_bits);
+    const uint8_t * signs = block + sizeof(scale_bits);
+
+    for (uint32_t j = 0; j < QK1_0; j++) {
+      //Avoid storing the dequantized row; reconstruct the signed weight
+      const uint8_t bit = (signs[j >> 3] >> (j & 7)) & 1u;
+      sum += (bit ? scale : -scale) * x[base + j];
+    }
+  }
+  return sum;
+}
+
+float dot_f32(const std::vector<float> & a, const std::vector<float> & b) {
+  if (a.size() != b.size()) throw std::runtime_error("dot size mismatch");
+  float sum = 0.0f;
+  for (size_t i = 0; i < a.size(); i++) sum += a[i] * b[i];
+  return sum;
+}
 
 
 // Future accelerator calls
@@ -294,7 +414,7 @@ std::string require_meta_string(const ModelView & model, const std::string & key
 }
 
 std::string layer_tensor(uint32_t layer, const std::string & suffix) {
-  //llama.cpp names Qwen3 block tensors as blk.<layer>.<role>.weight
+  // llama.cpp names Qwen3 block tensors as blk.<layer>.<role>.weight
   return "blk." + std::to_string(layer) + "." + suffix;
 }
 
@@ -410,8 +530,36 @@ public:
   }
 
   void check_q1() {
-    // TODO: compare Q1_0 helpers against simple dequantized references.
-    std::cout << "check_q1=TODO\n";
+    // Exercise one Bonsai Q1_0 row
+    const TensorView & tensor = require_tensor(model_, "blk.0.attn_q.weight");
+    const uint64_t cols = tensor.dims.at(0);
+    const uint64_t row = 7;
+    const std::vector<uint8_t> packed = read_q1_0_row(model_, tensor, row);
+
+    std::vector<float> x(cols);
+    for (uint64_t i = 0; i < cols; i++) x[i] = std::sin(float(i) * 0.013f);
+
+    const std::vector<float> dequant = dequantize_q1_0_row(packed, cols);
+    const float ref_dot = dot_f32(dequant, x);
+    const float direct_dot = dot_q1_0_row_f32(packed, x);
+    const float abs_err = std::fabs(ref_dot - direct_dot);
+    if (abs_err > 1e-4f) throw std::runtime_error("Q1_0 direct dot does not match dequantized reference");
+
+    metrics_.transformer_q1.calls++;
+    metrics_.transformer_q1.rows++;
+    metrics_.transformer_q1.dot_elements += cols;
+    metrics_.transformer_q1.groups_128 += cols / QK1_0;
+
+    std::cout << std::fixed << std::setprecision(6);
+    std::cout << "check_q1 tensor=" << tensor.name
+              << " row=" << row
+              << " cols=" << cols
+              << " row_bytes=" << packed.size()
+              << " groups_128=" << cols / QK1_0 << "\n";
+    std::cout << "check_q1 ref_dot=" << ref_dot
+              << " direct_dot=" << direct_dot
+              << " abs_err=" << abs_err << "\n";
+    std::cout << "check_q1=ok\n";
   }
 
   const BackendMetrics & metrics() const { return metrics_; }
