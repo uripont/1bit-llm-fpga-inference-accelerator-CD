@@ -4,10 +4,10 @@ set -euo pipefail
 # Run one human-readable generation with the Bonsai/Q1_0 model.
 #
 # Usage:
-#   src/baseline_benchmark/run-single-inference.sh [prompt] [max_completion_tokens]
+#   src/tier1_llama_cpp_benchmark/run-single-inference.sh [prompt] [max_completion_tokens]
 #
 # The same values can also be passed through environment variables:
-#   PROMPT="..." MAX_COMPLETION_LENGTH=384 src/baseline_benchmark/run-single-inference.sh
+#   PROMPT="..." MAX_COMPLETION_LENGTH=384 src/tier1_llama_cpp_benchmark/run-single-inference.sh
 
 cd "$(dirname "$0")/../.."
 
@@ -23,7 +23,7 @@ N_PREDICT="${2:-${MAX_COMPLETION_LENGTH:-${N_PREDICT:-384}}}"
 
 if [[ ! -x "$BIN" ]]; then
   echo "missing llama-cli: $BIN" >&2
-  echo "run src/baseline_benchmark/setup.sh first, or set BIN=/path/to/llama-cli" >&2
+  echo "run src/tier1_llama_cpp_benchmark/setup.sh first, or set BIN=/path/to/llama-cli" >&2
   exit 1
 fi
 

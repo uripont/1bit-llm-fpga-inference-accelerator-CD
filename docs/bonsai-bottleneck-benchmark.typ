@@ -9,7 +9,7 @@
 #set par(justify: true, leading: 0.56em)
 
 #align(center)[
-  #text(size: 17pt, weight: "bold")[Bonsai CPU Baseline and Bottleneck Scope]
+  #text(size: 17pt, weight: "bold")[Bonsai Benchmark Methodology and Bottlenecks Found]
 
   #v(0.35em)
   #text(size: 10pt)[Initial benchmark report - Oriol Pont, June 2026]
@@ -19,7 +19,13 @@
 
 = Starting point
 
-As described in the root README, the project began with Bonsai-family 1-bit language models as the acceleration target. Bonsai-1.7B is attractive because it is a general-purpose compact LLM, not a toy benchmark or architectural demo, and its Q1_0 weights expose a specific computation pattern: packed one-bit signs, group scales, and many fixed-weight linear layers. The initial software reference is upstream `llama.cpp`, because it gives a practical CPU-based baseline for edge deployment, and a known-correct execution path for profiling it. The first question after this initial setup was determining where Bonsai actually spends time when running end-to-end inference, from both prefilling (prompt processing) and decoding (autoregressive token generation). To answer that, a benchmark was created to instrument the `llama.cpp`/GGML CPU path and profiled operator time into multiple buckets according to operation type. The benchmark is run across increasing prompt lengths to make the result capture both short and long-context behavior.
+As described in the root README, the project began with Bonsai-family 1-bit language models as the acceleration target. Bonsai-1.7B is attractive because it is a general-purpose compact LLM, not just a toy benchmark or architectural demo, and its Q1_0 weights expose a hardware-relevant computation pattern: packed one-bit signs, per-group scales, and many repeated fixed-weight linear layers.
+
+After several early experiments, the benchmark is organized in _tiers_ according to the level of hardware abstraction and source code used. The first tier uses upstream `llama.cpp` as the known-correct software reference, because it provides the full Bonsai GGUF loading path, tokenizer/runtime support, and a practical CPU baseline for edge-style deployment. This tier answers where Bonsai spends time during real inference by instrumenting the `llama.cpp`/GGML CPU path and grouping profiled operator time into Q1_0 matrix operations, attention/KV-cache work, and other runtime work across increasing prompt lengths.
+
+The second tier uses a self-contained explicit C++ runner for the same Bonsai GGUF model. Unlike `llama.cpp`, this runner is written as readable inference code with clear backend functions. It is used to extract full-model call counts and operation shapes that can later be mapped onto hardware experiments.
+
+The third tier, developed after the software profiling, uses small NEORV32 simulation kernels to measure cycle counts for the specific hardware targets identified by the first two tiers. Together, the tiers separate three questions: where the real model spends time when run on CPU (to identify bottlenecks), how often each backend structure appears in the full model, and how many RISC-V/FPGA cycles a naive (reduced) implementation of each target costs.
 
 #let prefill_rows = (
   (pp: 128,   tok_s: 244.448, q1: 88.24, attn: 4.90,  other: 6.87, verdict: [strong Q1]),
@@ -72,50 +78,60 @@ As described in the root README, the project began with Bonsai-family 1-bit lang
   )
 }
 
-= Benchmark results
+= Tier 1: llama.cpp CPU profiling
+
+The first tier is the full software baseline, running Bonsai-1.7B Q1_0 GGUF through the upstream `llama.cpp` execution path, and profiling where time is spent inside the CPU operator graph. This is the reference used to decide which parts of inference are worth turning into hardware targets.
+
+== Benchmark setup
+
+#list(
+  [Model: `Bonsai-1.7B-Q1_0.gguf`.],
+  [Runtime: patched `llama.cpp`, using the `llama-batched-bench` benchmark executable, built from `batched-bench.cpp`.],
+  [Machine: MacBookPro with Apple M1 Pro.],
+  [Backend: CPU-only `llama.cpp` build with Metal/GPU disabled, Accelerate/BLAS enabled.],
+  [Threading: 6 benchmark threads for prompt and decode runs.],
+)
 
 The result files for these tables are, using "pp" prompts processed, and "tg" tokens generated:
 
 #list(
-  [`results/baseline_benchmark/full/prefill-summary.csv`],
-  [`results/baseline_benchmark/full/decode-summary.csv`],
-  [`results/baseline_benchmark/full/pl_1_pp_32768_tg_32.log`, as an example output for a specific run], 
+  [`results/tier1_llama_cpp_benchmark/full/prefill-summary.csv`],
+  [`results/tier1_llama_cpp_benchmark/full/decode-summary.csv`],
+  [`results/tier1_llama_cpp_benchmark/full/pl_1_pp_32768_tg_32.log`, as an example output for a specific run], 
 )
+
+The percentages in this tier are shares of profiled operator time. Prefill rows measure prompt processing, while decode rows measure autoregressive token generation as the KV cache grows. The profiling patch accumulates elapsed time inside GGML CPU/BLAS operators, and the summary scripts group that time into three buckets:
+
+#list(
+  [`Q1_0`: time in `MUL_MAT` operations where the source weight tensor is Q1_0.],
+  [`Attention`: time in `FLASH_ATTN_EXT`, used as the profiling proxy for attention and KV-cache traffic.],
+  [`Other`: remaining profiled operator time.],
+)
+
+The full sweep can be reproduced with `src/tier1_llama_cpp_benchmark/run-full-benchmark.py` after the `llama.cpp` setup step. The commands and setup details are documented in `src/tier1_llama_cpp_benchmark/README.md`.
+
+#pagebreak()
+
+== Benchmark results
 
 #v(0.25em)
 
 #bottleneck-table([Prefill summary], prefill_rows)
 
+Short and medium prompt prefill is dominated by Q1_0 matrix work. At 128 and 512 prompt tokens, Q1_0 operations account for more than 80% of profiled operator time. As the prompt grows, attention/KV-cache work rises steadily, and by 8192 tokens and above attention becomes the dominant prefill cost.
+
 #v(0.85em)
 
 #bottleneck-table([Decode summary], decode_rows)
 
+Early decode is also Q1_0-heavy, because each new token applies the fixed model weights while the KV history is still short. Long-context decode shifts toward attention/KV-cache traversal.
 
-#text(size: 8.7pt)[Percentages are shares of profiled operator time. Q1_0 is `MUL_MAT` with Q1_0 source weights. Attention is `FLASH_ATTN_EXT`, which is the profiled proxy for attention and KV-cache traffic. Decode rows use 128 generated tokens except the 32768-token row, which uses the stored 32-token max-context run.]
-
-== Bottleneck analysis
+== Tier 1 conclusions
 
 The measured split identifies two clear, different regimes. At short contexts, where the model repeatedly applies fixed Q1_0 weights and attention has little history to read, the dependence is primarily arithmetic and packed weight processing: extracting one-bit signs, applying group scales, accumulating dot products, and writing output activations across many layers. On the other hand, at long contexts, attention becomes dominant. This dependence is mainly memory traffic and data movement: the KV cache grows with sequence length, and each generated token must access a larger history.
-#pagebreak()
 
-Since we aim to increase throughput at all different context sizes, the benchmark justifies a dual-target approach. Before assessing the SoC restrictions and architecture, the project should treat these as separate bottlenecks with different causes: one mostly arithmetic over packed weights, the other mostly memory bandwidth and cache traversal.
+Since we aim to increase throughput at all different context sizes, this first benchmark already suggests embracing a *dual-target approach*. Before assessing the SoC restrictions and architecture, the project should treat these as separate bottlenecks with different causes: one mostly arithmetic over packed weights, the other mostly memory bandwidth and cache traversal.
 
-== Weight placement and scalability
+= Tier 2: self-contained Bonsai C++ runner
 
-An instructive reference is #link("https://v2.talos.wtf/")[Talos V2], which maps a complete Transformer inference path into RTL and stores fixed weights in ROM-friendly files to achieve extremely high throughput (50k tok/s). This demonstrates the benefit of placing immutable weights beside the datapath and removing their repeated movement. However, Talos deliberately uses a very small character-level microGPT model as a learning tool, which is not useful for general-purpose LLM inference. FPGA fabric has limited, expensive on-chip memory, while external memory capacity and bandwidth depend on the selected board. Keeping every model weight in FPGA ROM is consequently suitable only for a sufficiently tiny model, or for a system that partitions the model across many accelerator devices. Since the intended approach should remain applicable at different model sizes of the same family of models, the first design should not require the complete model to be resident in the FPGA, which was the original naive motivation of the project.
-
-= First target: Q1_0 matrix-vector operations
-
-In the profiled `llama.cpp` CPU implementation, a Q1_0 weight block represents 128 weights using 128 sign bits and one FP16 scale. The corresponding activation vector is quantized into Q8_0 blocks. For each dot product, the CPU reads the packed weight bits, expands them into +1 or -1 signs, combines them with the signed activation values using SIMD integer dot products, applies the weight and activation scales, and accumulates the result. This is already an optimized CPU kernel, but it still expresses a highly regular fixed-format operation through general-purpose instructions, vector registers, lookup or bit-expansion logic, and repeated loop control.
-
-A specialized path can map the same operation more directly into hardware. *Packed signs can select addition or subtraction without general multipliers*, several activation lanes can be accumulated in parallel, the activation block can be retained while many weight rows pass through, etc. The initial first target is a hardware implementation of the existing Q1_0-by-Q8_0 dot-product semantics, to be compared against the CPU result.
-
-= Second target: attention and KV-cache traffic
-
-At long contexts, decode repeatedly traverses an increasingly large KV cache, so attention becomes constrained mainly by the number of bytes that must be read for each new token generated. One possible accelerator contribution is to *coordinate the memory hierarchy* more carefully, staging and reusing KV data in faster local memories instead of repeatedly accessing slower levels. This is a suitable target for an FPGA, which can pipeline memory accesses and attention-side processing close to the memory stream. 
-
-An optimization that only provides more effective bandwidth could eventually be superseded by attaching a higher-bandwidth memory system to the existing inference path. This is why it could be more valuable long-term to focus on an approach that remains equally useful as hardware bandwidth improves: reducing the size of the KV cache itself. A smaller representation lowers the memory capacity required as contexts grow, which in turn reduces the traffic that every level of the memory hierarchy must carry. For example, the second target could focus on KV-cache quantization, initially using ideas from recent SOTA quantization like #link("https://arxiv.org/abs/2504.19874")[TurboQuant]. TurboQuant is an online vector-quantization method that uses a structured rotation and scalar quantization, with an additional residual correction for inner-product estimation. This trade is potentially suitable for an FPGA: rotation, quantization, packing, reconstruction, and attention-side processing could be pipelined close to the memory stream. However, the main contribution of this approach would be significantly algorithmic. To focus just on the effect of hardware accelerator design, the second benchmark will rely on the former proposed orchestration of the memory hierarchy, and will not attempt to change the KV representation itself.
-
-=== Conclusion
-
-The benchmark identifies two distinct bottlenecks in Bonsai inference: Q1_0 matrix-vector operations at short contexts, and attention/KV-cache traffic at long contexts. We will treat these as separate targets for hardware acceleration, focusing on specialized hardware for Q1_0 operations and improved memory hierarchy management for attention. This dual-target approach will guide the design of the Bonsai accelerator to achieve higher throughput across varying context lengths. Further details on the architecture and implementation will be provided in subsequent documentation outside of the scope of this benchmark report.
+Tier 1 is the best reference for real CPU runtime behavior and understanding which were the main bottlenecks. For hardware co-design, a more direct source view is useful because the relevant work in `llama.cpp` is spread through the runtime, GGML graph execution, tensor abstractions, backend dispatch, tokenizer/runtime setup, and optimized kernels, which is complex and time-consuming. The project therefore also needs a simpler program, more adequate to the scope of the course project, that still runs the real Bonsai tensors and exposes the inference path as explicit loops and named backend functions.

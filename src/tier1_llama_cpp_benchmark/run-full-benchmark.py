@@ -237,7 +237,7 @@ def main():
     parser = argparse.ArgumentParser(description="Run and summarize Bonsai/Q1_0 CPU baseline profiling.")
     parser.add_argument("--model", type=Path, default=Path("models/bonsai-1.7b-gguf/Bonsai-1.7B-Q1_0.gguf"))
     parser.add_argument("--bin", type=Path, default=Path("external/llama.cpp/build-cpu/bin/llama-batched-bench"))
-    parser.add_argument("--output-dir", type=Path, default=Path("results/baseline_benchmark/full"))
+    parser.add_argument("--output-dir", type=Path, default=Path("results/tier1_llama_cpp_benchmark/full"))
     parser.add_argument("--input-dir", type=Path, default=None)
     parser.add_argument("--summarize-only", action="store_true")
     parser.add_argument("--ctx-size", type=int, default=33024)

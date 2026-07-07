@@ -1,6 +1,6 @@
-# Baseline Benchmark
+# Tier 1: llama.cpp CPU Benchmark
 
-This folder contains the CPU baseline experiment for Bonsai/Q1_0 inference. The baseline is CPU-based because the course board doesn't have GPU support within, and because CPU-only local inference is still a relevant target for small low-bit models. Public Bonsai/PrismML material describes the smaller 1-bit models as having very small memory footprints, including a [1.7B model around 0.25 GB](https://huggingface.co/prism-ml/Bonsai-1.7B-gguf) and a [4B model around 0.57 GB](https://huggingface.co/prism-ml/Bonsai-4B-gguf), making them closer to edge/local-device deployment than ordinary 16-bit models. These are production-ready general-purpose small models, [slightly trailing behind SOTA scores for their parameter count but about an order of magnitude less memory footprint](https://github.com/PrismML-Eng/Bonsai-demo/blob/main/1-bit-bonsai-8b-whitepaper.pdf), and not just research toy implementations. And, as the announcement notes suggest, their inference has still a lot of [room for optimization and hardware co-design](https://prismml.com/news/bonsai-8b#:~:text=1%2Dbit%20Hardware%E2%80%8D) given the nature of binary operations instead of floating-point operations.
+This folder contains the Tier 1 CPU baseline experiment for Bonsai/Q1_0 inference. The baseline is CPU-based because the course board does not provide a GPU path, and because CPU-only local inference is still a relevant target for small low-bit models. Public Bonsai/PrismML material describes the smaller 1-bit models as having very small memory footprints, including a [1.7B model around 0.25 GB](https://huggingface.co/prism-ml/Bonsai-1.7B-gguf) and a [4B model around 0.57 GB](https://huggingface.co/prism-ml/Bonsai-4B-gguf), making them closer to edge/local-device deployment than ordinary 16-bit models. These are production-ready general-purpose small models, [slightly trailing behind SOTA scores for their parameter count but about an order of magnitude less memory footprint](https://github.com/PrismML-Eng/Bonsai-demo/blob/main/1-bit-bonsai-8b-whitepaper.pdf), and not just research toy implementations. And, as the announcement notes suggest, their inference has still a lot of [room for optimization and hardware co-design](https://prismml.com/news/bonsai-8b#:~:text=1%2Dbit%20Hardware%E2%80%8D) given the nature of binary operations instead of floating-point operations.
 
 The benchmark starts from the original inference path. We use upstream `llama.cpp` as an external dependency, since running Bonsai/Q1_0 needs the full GGUF loader, tokenizer, runtime, model support, and GGML CPU/BLAS backends. The profiling patch is pinned to a specific upstream `llama.cpp` commit, for future reproducibility:
 
@@ -15,7 +15,7 @@ The benchmark starts from the original inference path. We use upstream `llama.cp
 Set up the pinned and patched `llama.cpp` build:
 
 ```sh
-src/baseline_benchmark/setup.sh
+src/tier1_llama_cpp_benchmark/setup.sh
 ```
 
 This also prepares the default model path used below. Because the GGUF is too
@@ -25,19 +25,19 @@ large to keep in this repo, setup downloads
 on Hugging Face. If the model already lives elsewhere, pass it explicitly:
 
 ```sh
-MODEL_SOURCE=/path/to/Bonsai-1.7B-Q1_0.gguf src/baseline_benchmark/setup.sh
+MODEL_SOURCE=/path/to/Bonsai-1.7B-Q1_0.gguf src/tier1_llama_cpp_benchmark/setup.sh
 ```
 
 Run text generation:
 
 ```sh
-src/baseline_benchmark/run-single-inference.sh
+src/tier1_llama_cpp_benchmark/run-single-inference.sh
 ```
 
 The prompt and max completion length can be specified directly:
 
 ```sh
-src/baseline_benchmark/run-single-inference.sh \
+src/tier1_llama_cpp_benchmark/run-single-inference.sh \
   "Why are 1-bit LLMs interesting for CPU-only edge inference?" \
   384
 ```
@@ -45,15 +45,15 @@ src/baseline_benchmark/run-single-inference.sh \
 Run one profiled prompt-based generation:
 
 ```sh
-src/baseline_benchmark/run-measured-inference.sh
+src/tier1_llama_cpp_benchmark/run-measured-inference.sh
 ```
 
-This writes the model answer plus CPU/BLAS operation profile to `results/baseline_benchmark/single/measured-inference.log`.
+This writes the model answer plus CPU/BLAS operation profile to `results/tier1_llama_cpp_benchmark/single/measured-inference.log`.
 
 Run the full prefill/decode context sweep and write CSV summaries:
 
 ```sh
-src/baseline_benchmark/run-full-benchmark.py
+src/tier1_llama_cpp_benchmark/run-full-benchmark.py
 ```
 
 By default this sweeps prompt lengths 0, 128, 512, 2048, 4096, 8192, 16384,
@@ -73,5 +73,5 @@ external/llama.cpp/build-cpu/bin/llama-batched-bench
 Full benchmark outputs are written under:
 
 ```text
-results/baseline_benchmark/full/
+results/tier1_llama_cpp_benchmark/full/
 ```
