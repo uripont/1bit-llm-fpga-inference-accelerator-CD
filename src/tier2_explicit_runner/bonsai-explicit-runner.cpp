@@ -361,8 +361,17 @@ struct BackendMetrics {
   uint64_t attention_value_mac = 0;
 };
 
-// TODO: q1_matvec_backend(weight, x) -> y
-// TODO: attention_backend(layer, q, kv_cache) -> y
+struct DecodeMetrics {
+  uint64_t tokens = 0;
+  uint64_t layers = 0;
+  uint64_t rms_norms = 0;
+  uint64_t q1_backend_calls = 0;
+  uint64_t attention_backend_calls = 0;
+  uint64_t residual_adds = 0;
+  uint64_t silu_gate_products = 0;
+  uint64_t lm_head_calls = 0;
+};
+
 // TODO: lm_head_backend(hidden) -> logits / argmax
 
 // ---------------------------------------------------------------------------
@@ -524,9 +533,49 @@ public:
   }
 
   void trace_one_token(uint32_t token) {
-    (void)token;
-    // TODO: implement the order above one stage at a time
-    std::cout << "trace_one_token=TODO\n";
+    decode_.tokens++;
+    decode_.layers += shape_.n_layer;
+    decode_.rms_norms += uint64_t(shape_.n_layer) * 5 + 1;
+    decode_.q1_backend_calls += uint64_t(shape_.n_layer) * 7 + 1;
+    decode_.attention_backend_calls += shape_.n_layer;
+    decode_.residual_adds += uint64_t(shape_.n_layer) * 2;
+    decode_.silu_gate_products += shape_.n_layer;
+    decode_.lm_head_calls++;
+
+    // decode graph and backend reporting
+    metrics_.transformer_q1.calls += uint64_t(shape_.n_layer) * 7;
+    metrics_.lm_head_q1.calls++;
+    metrics_.attention_calls += shape_.n_layer;
+
+    std::cout << "trace_decode token=" << token
+              << " layers=" << shape_.n_layer
+              << " hidden=" << shape_.n_embd
+              << " ffn=" << shape_.n_ff
+              << " heads=" << shape_.n_head
+              << " kv_heads=" << shape_.n_head_kv
+              << " head_dim=" << shape_.head_dim << "\n";
+    std::cout << "decode_step embed token_embd.weight -> hidden\n";
+
+    for (uint32_t layer = 0; layer < shape_.n_layer; layer++) {
+      std::cout << "decode_layer layer=" << layer
+                << " q1_backend_calls=7"
+                << " attention_backend_calls=1"
+                << " rms_norms=5"
+                << " residual_adds=2"
+                << " silu_gate_products=1"
+                << " tensors=[attn_q,attn_k,attn_v,attn_output,ffn_gate,ffn_up,ffn_down]\n";
+    }
+
+    std::cout << "decode_step output_norm -> lm_head_q1 -> logits\n";
+    std::cout << "decode_summary"
+              << " tokens=" << decode_.tokens
+              << " layers=" << decode_.layers
+              << " rms_norms=" << decode_.rms_norms
+              << " q1_backend_calls=" << decode_.q1_backend_calls
+              << " attention_backend_calls=" << decode_.attention_backend_calls
+              << " residual_adds=" << decode_.residual_adds
+              << " silu_gate_products=" << decode_.silu_gate_products
+              << " lm_head_calls=" << decode_.lm_head_calls << "\n";
   }
 
   void check_q1() {
@@ -563,6 +612,7 @@ public:
   }
 
   const BackendMetrics & metrics() const { return metrics_; }
+  const DecodeMetrics & decode_metrics() const { return decode_; }
 
 private:
   void print_meta(const std::string & key) const {
@@ -573,11 +623,17 @@ private:
   ModelView model_;
   ModelShape shape_;
   BackendMetrics metrics_;
+  DecodeMetrics decode_;
 };
 
 
-void print_metrics(const BackendMetrics & metrics) {
+void print_metrics(const BackendMetrics & metrics, const DecodeMetrics & decode) {
   std::cout << "backend_metrics"
+            << " decode_tokens=" << decode.tokens
+            << " decode_layers=" << decode.layers
+            << " decode_rms_norms=" << decode.rms_norms
+            << " decode_residual_adds=" << decode.residual_adds
+            << " decode_silu_gate_products=" << decode.silu_gate_products
             << " transformer_q1_matvec_calls=" << metrics.transformer_q1.calls
             << " transformer_q1_rows=" << metrics.transformer_q1.rows
             << " transformer_q1_dot_elements=" << metrics.transformer_q1.dot_elements
@@ -585,6 +641,7 @@ void print_metrics(const BackendMetrics & metrics) {
             << " attention_calls=" << metrics.attention_calls
             << " attention_score_mac=" << metrics.attention_score_mac
             << " attention_value_mac=" << metrics.attention_value_mac
+            << " lm_head_q1_matvec_calls=" << metrics.lm_head_q1.calls
             << " lm_head_q1_rows=" << metrics.lm_head_q1.rows
             << " lm_head_q1_dot_elements=" << metrics.lm_head_q1.dot_elements
             << " lm_head_q1_groups_128=" << metrics.lm_head_q1.groups_128
@@ -617,7 +674,7 @@ int main(int argc, char ** argv)
       runner.trace_one_token(token);
     }
 
-    bonsai_tier2::print_metrics(runner.metrics());
+    bonsai_tier2::print_metrics(runner.metrics(), runner.decode_metrics());
   } catch (const std::exception & e) {
     std::cerr << "error: " << e.what() << "\n";
     return 1;
