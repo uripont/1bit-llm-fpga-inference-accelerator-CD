@@ -11,6 +11,7 @@
 //   - external/llama.cpp/ggml/src/ggml-blas/ggml-blas.cpp  BLAS matmul path used in Tier 1
 
 #include <cstdint>
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -241,6 +242,13 @@ struct Q1Metrics {
   uint64_t groups_128 = 0;
 };
 
+void add_q1_metrics(Q1Metrics & dst, const Q1Metrics & src) {
+  dst.calls += src.calls;
+  dst.rows += src.rows;
+  dst.dot_elements += src.dot_elements;
+  dst.groups_128 += src.groups_128;
+}
+
 float fp16_to_f32(uint16_t h) {
   // Q1_0 stores each block scale as ggml_half before its 128 packed sign bits.
   const uint32_t sign = (uint32_t(h) & 0x8000u) << 16;
@@ -302,6 +310,23 @@ std::vector<uint8_t> read_q1_0_row(const ModelView & model, const TensorView & t
   return bytes;
 }
 
+std::vector<uint8_t> read_q1_0_tensor(const ModelView & model, const TensorView & tensor) {
+  if (tensor.type != GGUF_TYPE_Q1_0) throw std::runtime_error("tensor is not Q1_0: " + tensor.name);
+  if (tensor.dims.size() != 2) throw std::runtime_error("Q1_0 tensor read expects rank-2 tensor: " + tensor.name);
+
+  const uint64_t cols = tensor.dims[0];
+  const uint64_t rows = tensor.dims[1];
+  const uint64_t bytes_total = rows * q1_0_row_size(cols);
+  std::vector<uint8_t> bytes(bytes_total);
+  std::ifstream file(model.path, std::ios::binary);
+
+  if (!file) throw std::runtime_error("cannot reopen model: " + model.path);
+  file.seekg(static_cast<std::streamoff>(tensor.absolute_offset));
+  file.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+  if (!file) throw std::runtime_error("could not read Q1_0 tensor: " + tensor.name);
+  return bytes;
+}
+
 std::vector<float> dequantize_q1_0_row(const std::vector<uint8_t> & row, uint64_t cols) {
   if (row.size() != q1_0_row_size(cols)) throw std::runtime_error("bad Q1_0 row byte count");
 
@@ -337,6 +362,25 @@ float dot_q1_0_row_f32(const std::vector<uint8_t> & row, const std::vector<float
 
     for (uint32_t j = 0; j < QK1_0; j++) {
       //Avoid storing the dequantized row; reconstruct the signed weight
+      const uint8_t bit = (signs[j >> 3] >> (j & 7)) & 1u;
+      sum += (bit ? scale : -scale) * x[base + j];
+    }
+  }
+  return sum;
+}
+
+float dot_q1_0_row_f32(const uint8_t * row, uint64_t row_bytes, const std::vector<float> & x) {
+  if (row_bytes != q1_0_row_size(x.size())) throw std::runtime_error("bad Q1_0 row/input size");
+
+  float sum = 0.0f;
+  const uint8_t * block = row;
+  for (uint64_t base = 0; base < x.size(); base += QK1_0, block += Q1_0_BLOCK_BYTES) {
+    uint16_t scale_bits = 0;
+    std::memcpy(&scale_bits, block, sizeof(scale_bits));
+    const float scale = fp16_to_f32(scale_bits);
+    const uint8_t * signs = block + sizeof(scale_bits);
+
+    for (uint32_t j = 0; j < QK1_0; j++) {
       const uint8_t bit = (signs[j >> 3] >> (j & 7)) & 1u;
       sum += (bit ? scale : -scale) * x[base + j];
     }
@@ -542,9 +586,6 @@ public:
     decode_.silu_gate_products += shape_.n_layer;
     decode_.lm_head_calls++;
 
-    // decode graph and backend reporting
-    metrics_.transformer_q1.calls += uint64_t(shape_.n_layer) * 7;
-    metrics_.lm_head_q1.calls++;
     metrics_.attention_calls += shape_.n_layer;
 
     std::cout << "trace_decode token=" << token
@@ -555,10 +596,40 @@ public:
               << " kv_heads=" << shape_.n_head_kv
               << " head_dim=" << shape_.head_dim << "\n";
     std::cout << "decode_step embed token_embd.weight -> hidden\n";
+    std::vector<float> hidden(shape_.n_embd);
+    for (uint64_t i = 0; i < hidden.size(); i++) hidden[i] = std::sin(float(i) * 0.007f);
 
+    // Decode each layer in Bonsai/Qwen3, using the Q1_0 backend for all matrix-vector products
     for (uint32_t layer = 0; layer < shape_.n_layer; layer++) {
+      Q1Metrics layer_q1;
+      const std::vector<float> q = q1_matvec_backend(layer_tensor(layer, "attn_q.weight"), hidden, metrics_.transformer_q1, &layer_q1);
+      const std::vector<float> k = q1_matvec_backend(layer_tensor(layer, "attn_k.weight"), hidden, metrics_.transformer_q1, &layer_q1);
+      const std::vector<float> v = q1_matvec_backend(layer_tensor(layer, "attn_v.weight"), hidden, metrics_.transformer_q1, &layer_q1);
+      (void)q;
+      (void)k;
+      (void)v;
+
+      // TODO: attention
+      // temporally using right output shape for the Q1 output projection
+      const std::vector<float> attention_out(shape_.n_embd, 0.0f);
+      const std::vector<float> projected_attention = q1_matvec_backend(layer_tensor(layer, "attn_output.weight"), attention_out, metrics_.transformer_q1, &layer_q1);
+      const std::vector<float> ffn_gate = q1_matvec_backend(layer_tensor(layer, "ffn_gate.weight"), hidden, metrics_.transformer_q1, &layer_q1);
+      const std::vector<float> ffn_up = q1_matvec_backend(layer_tensor(layer, "ffn_up.weight"), hidden, metrics_.transformer_q1, &layer_q1);
+
+      std::vector<float> gated(ffn_gate.size());
+      for (size_t i = 0; i < gated.size(); i++) {
+        const float x = ffn_gate[i];
+        gated[i] = (x / (1.0f + std::exp(-x))) * ffn_up[i];
+      }
+      hidden = q1_matvec_backend(layer_tensor(layer, "ffn_down.weight"), gated, metrics_.transformer_q1, &layer_q1);
+      for (size_t i = 0; i < hidden.size(); i++) hidden[i] += projected_attention[i];
+
+      // Reporting decode information
       std::cout << "decode_layer layer=" << layer
                 << " q1_backend_calls=7"
+                << " q1_rows=" << layer_q1.rows
+                << " q1_dot_elements=" << layer_q1.dot_elements
+                << " q1_groups_128=" << layer_q1.groups_128
                 << " attention_backend_calls=1"
                 << " rms_norms=5"
                 << " residual_adds=2"
@@ -566,6 +637,8 @@ public:
                 << " tensors=[attn_q,attn_k,attn_v,attn_output,ffn_gate,ffn_up,ffn_down]\n";
     }
 
+    Q1Metrics lm_head_q1;
+    const std::vector<float> logits = q1_matvec_backend("token_embd.weight", hidden, metrics_.lm_head_q1, &lm_head_q1);
     std::cout << "decode_step output_norm -> lm_head_q1 -> logits\n";
     std::cout << "decode_summary"
               << " tokens=" << decode_.tokens
@@ -575,7 +648,11 @@ public:
               << " attention_backend_calls=" << decode_.attention_backend_calls
               << " residual_adds=" << decode_.residual_adds
               << " silu_gate_products=" << decode_.silu_gate_products
-              << " lm_head_calls=" << decode_.lm_head_calls << "\n";
+              << " lm_head_calls=" << decode_.lm_head_calls
+              << " logits=" << logits.size()
+              << " lm_head_q1_rows=" << lm_head_q1.rows
+              << " lm_head_q1_dot_elements=" << lm_head_q1.dot_elements
+              << " lm_head_q1_groups_128=" << lm_head_q1.groups_128 << "\n";
   }
 
   void check_q1() {
@@ -594,10 +671,18 @@ public:
     const float abs_err = std::fabs(ref_dot - direct_dot);
     if (abs_err > 1e-4f) throw std::runtime_error("Q1_0 direct dot does not match dequantized reference");
 
-    metrics_.transformer_q1.calls++;
-    metrics_.transformer_q1.rows++;
-    metrics_.transformer_q1.dot_elements += cols;
-    metrics_.transformer_q1.groups_128 += cols / QK1_0;
+    Q1Metrics matvec_metrics;
+    // Verify that the backend matvec matches the dequantized reference for a few rows
+    const std::vector<float> y = q1_matvec_backend(tensor.name, x, metrics_.transformer_q1, &matvec_metrics);
+    const uint64_t check_rows[] = {0, row, tensor.dims.at(1) - 1};
+    float max_matvec_err = 0.0f;
+    for (uint64_t check_row : check_rows) {
+      const std::vector<uint8_t> row_bytes = read_q1_0_row(model_, tensor, check_row);
+      const std::vector<float> row_dequant = dequantize_q1_0_row(row_bytes, cols);
+      const float row_ref = dot_f32(row_dequant, x);
+      max_matvec_err = std::max(max_matvec_err, std::fabs(row_ref - y.at(check_row)));
+    }
+    if (max_matvec_err > 1e-4f) throw std::runtime_error("Q1_0 matvec does not match dequantized reference rows");
 
     std::cout << std::fixed << std::setprecision(6);
     std::cout << "check_q1 tensor=" << tensor.name
@@ -608,6 +693,10 @@ public:
     std::cout << "check_q1 ref_dot=" << ref_dot
               << " direct_dot=" << direct_dot
               << " abs_err=" << abs_err << "\n";
+    std::cout << "check_q1 matvec_rows=" << y.size()
+              << " matvec_dot_elements=" << matvec_metrics.dot_elements
+              << " matvec_groups_128=" << matvec_metrics.groups_128
+              << " matvec_max_ref_err=" << max_matvec_err << "\n";
     std::cout << "check_q1=ok\n";
   }
 
@@ -615,6 +704,37 @@ public:
   const DecodeMetrics & decode_metrics() const { return decode_; }
 
 private:
+  std::vector<float> q1_matvec_backend(const std::string & tensor_name,
+                                       const std::vector<float> & x,
+                                       Q1Metrics & total,
+                                       Q1Metrics * local = nullptr) {
+    const TensorView & tensor = require_tensor(model_, tensor_name);
+    if (tensor.type != GGUF_TYPE_Q1_0) throw std::runtime_error("Q1 backend expected Q1_0 tensor: " + tensor.name);
+    if (tensor.dims.size() != 2) throw std::runtime_error("Q1 backend expected rank-2 tensor: " + tensor.name);
+
+    const uint64_t cols = tensor.dims[0];
+    const uint64_t rows = tensor.dims[1];
+    if (x.size() != cols) throw std::runtime_error("Q1 backend input size mismatch: " + tensor.name);
+    const uint64_t row_bytes = q1_0_row_size(cols);
+    const std::vector<uint8_t> packed = read_q1_0_tensor(model_, tensor);
+
+    // One call computes all output rows: rows dot products, each over cols packed weights.
+    Q1Metrics call;
+    call.calls = 1;
+    call.rows = rows;
+    call.dot_elements = rows * cols;
+    call.groups_128 = rows * (cols / QK1_0);
+    
+    add_q1_metrics(total, call);
+    if (local) add_q1_metrics(*local, call);
+
+    std::vector<float> y(rows);
+    for (uint64_t row = 0; row < rows; row++) {
+      y[row] = dot_q1_0_row_f32(packed.data() + row * row_bytes, row_bytes, x);
+    }
+    return y;
+  }
+
   void print_meta(const std::string & key) const {
     auto it = model_.meta.find(key);
     if (it != model_.meta.end()) std::cout << key << "=" << meta_to_string(it->second) << "\n";
@@ -632,8 +752,11 @@ void print_metrics(const BackendMetrics & metrics, const DecodeMetrics & decode)
             << " decode_tokens=" << decode.tokens
             << " decode_layers=" << decode.layers
             << " decode_rms_norms=" << decode.rms_norms
+            << " decode_q1_backend_calls=" << decode.q1_backend_calls
+            << " decode_attention_backend_calls=" << decode.attention_backend_calls
             << " decode_residual_adds=" << decode.residual_adds
             << " decode_silu_gate_products=" << decode.silu_gate_products
+            << " decode_lm_head_calls=" << decode.lm_head_calls
             << " transformer_q1_matvec_calls=" << metrics.transformer_q1.calls
             << " transformer_q1_rows=" << metrics.transformer_q1.rows
             << " transformer_q1_dot_elements=" << metrics.transformer_q1.dot_elements
