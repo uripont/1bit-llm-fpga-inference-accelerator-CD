@@ -296,6 +296,18 @@ uint64_t q1_0_row_size(uint64_t cols) {
   return (cols / QK1_0) * Q1_0_BLOCK_BYTES;
 }
 
+// Helper to read raw bytes from a tensor in the GGUF file given offset and size
+std::vector<uint8_t> read_bytes_at(const ModelView & model, uint64_t offset, uint64_t size, const std::string & label) {
+  std::vector<uint8_t> bytes(size);
+  std::ifstream file(model.path, std::ios::binary);
+
+  if (!file) throw std::runtime_error("cannot reopen model: " + model.path);
+  file.seekg(static_cast<std::streamoff>(offset));
+  file.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+  if (!file) throw std::runtime_error("could not read tensor bytes: " + label);
+  return bytes;
+}
+
 std::vector<uint8_t> read_q1_0_row(const ModelView & model, const TensorView & tensor, uint64_t row) {
   if (tensor.type != GGUF_TYPE_Q1_0) throw std::runtime_error("tensor is not Q1_0: " + tensor.name);
   if (tensor.dims.size() != 2) throw std::runtime_error("Q1_0 row read expects rank-2 tensor: " + tensor.name);
@@ -305,14 +317,7 @@ std::vector<uint8_t> read_q1_0_row(const ModelView & model, const TensorView & t
   if (row >= rows) throw std::runtime_error("Q1_0 row index out of range: " + tensor.name);
 
   const uint64_t row_bytes = q1_0_row_size(cols);
-  std::vector<uint8_t> bytes(row_bytes);
-  std::ifstream file(model.path, std::ios::binary);
-
-  if (!file) throw std::runtime_error("cannot reopen model: " + model.path);
-  file.seekg(static_cast<std::streamoff>(tensor.absolute_offset + row * row_bytes));
-  file.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-  if (!file) throw std::runtime_error("could not read Q1_0 row: " + tensor.name);
-  return bytes;
+  return read_bytes_at(model, tensor.absolute_offset + row * row_bytes, row_bytes, tensor.name);
 }
 
 std::vector<uint8_t> read_q1_0_tensor(const ModelView & model, const TensorView & tensor) {
@@ -322,14 +327,7 @@ std::vector<uint8_t> read_q1_0_tensor(const ModelView & model, const TensorView 
   const uint64_t cols = tensor.dims[0];
   const uint64_t rows = tensor.dims[1];
   const uint64_t bytes_total = rows * q1_0_row_size(cols);
-  std::vector<uint8_t> bytes(bytes_total);
-  std::ifstream file(model.path, std::ios::binary);
-
-  if (!file) throw std::runtime_error("cannot reopen model: " + model.path);
-  file.seekg(static_cast<std::streamoff>(tensor.absolute_offset));
-  file.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-  if (!file) throw std::runtime_error("could not read Q1_0 tensor: " + tensor.name);
-  return bytes;
+  return read_bytes_at(model, tensor.absolute_offset, bytes_total, tensor.name);
 }
 
 std::vector<float> read_f32_tensor(const ModelView & model, const TensorView & tensor) {
@@ -338,12 +336,8 @@ std::vector<float> read_f32_tensor(const ModelView & model, const TensorView & t
   uint64_t count = 1;
   for (uint64_t dim : tensor.dims) count *= dim;
   std::vector<float> values(count);
-  std::ifstream file(model.path, std::ios::binary);
-
-  if (!file) throw std::runtime_error("cannot reopen model: " + model.path);
-  file.seekg(static_cast<std::streamoff>(tensor.absolute_offset));
-  file.read(reinterpret_cast<char *>(values.data()), static_cast<std::streamsize>(values.size() * sizeof(float)));
-  if (!file) throw std::runtime_error("could not read F32 tensor: " + tensor.name);
+  const std::vector<uint8_t> bytes = read_bytes_at(model, tensor.absolute_offset, values.size() * sizeof(float), tensor.name);
+  std::memcpy(values.data(), bytes.data(), bytes.size());
   return values;
 }
 
@@ -368,11 +362,11 @@ std::vector<float> dequantize_q1_0_row(const std::vector<uint8_t> & row, uint64_
   return out;
 }
 
-float dot_q1_0_row_f32(const std::vector<uint8_t> & row, const std::vector<float> & x) {
-  if (row.size() != q1_0_row_size(x.size())) throw std::runtime_error("bad Q1_0 row/input size");
+float dot_q1_0_row_f32(const uint8_t * row, uint64_t row_bytes, const std::vector<float> & x) {
+  if (row_bytes != q1_0_row_size(x.size())) throw std::runtime_error("bad Q1_0 row/input size");
 
   float sum = 0.0f;
-  const uint8_t * block = row.data();
+  const uint8_t * block = row;
   for (uint64_t base = 0; base < x.size(); base += QK1_0, block += Q1_0_BLOCK_BYTES) {
     // Same Q1_0 layout as dequantize_q1_0_row()
     uint16_t scale_bits = 0;
@@ -389,23 +383,8 @@ float dot_q1_0_row_f32(const std::vector<uint8_t> & row, const std::vector<float
   return sum;
 }
 
-float dot_q1_0_row_f32(const uint8_t * row, uint64_t row_bytes, const std::vector<float> & x) {
-  if (row_bytes != q1_0_row_size(x.size())) throw std::runtime_error("bad Q1_0 row/input size");
-
-  float sum = 0.0f;
-  const uint8_t * block = row;
-  for (uint64_t base = 0; base < x.size(); base += QK1_0, block += Q1_0_BLOCK_BYTES) {
-    uint16_t scale_bits = 0;
-    std::memcpy(&scale_bits, block, sizeof(scale_bits));
-    const float scale = fp16_to_f32(scale_bits);
-    const uint8_t * signs = block + sizeof(scale_bits);
-
-    for (uint32_t j = 0; j < QK1_0; j++) {
-      const uint8_t bit = (signs[j >> 3] >> (j & 7)) & 1u;
-      sum += (bit ? scale : -scale) * x[base + j];
-    }
-  }
-  return sum;
+float dot_q1_0_row_f32(const std::vector<uint8_t> & row, const std::vector<float> & x) {
+  return dot_q1_0_row_f32(row.data(), row.size(), x);
 }
 
 float dot_f32(const std::vector<float> & a, const std::vector<float> & b) {
@@ -413,6 +392,22 @@ float dot_f32(const std::vector<float> & a, const std::vector<float> & b) {
   float sum = 0.0f;
   for (size_t i = 0; i < a.size(); i++) sum += a[i] * b[i];
   return sum;
+}
+
+void add_inplace(std::vector<float> & dst, const std::vector<float> & src) {
+  if (dst.size() != src.size()) throw std::runtime_error("vector add size mismatch");
+  for (size_t i = 0; i < dst.size(); i++) dst[i] += src[i];
+}
+
+std::vector<float> silu_times_up(const std::vector<float> & gate, const std::vector<float> & up) {
+  if (gate.size() != up.size()) throw std::runtime_error("SwiGLU size mismatch");
+
+  std::vector<float> out(gate.size());
+  for (size_t i = 0; i < out.size(); i++) {
+    const float x = gate[i];
+    out[i] = (x / (1.0f + std::exp(-x))) * up[i];
+  }
+  return out;
 }
 
 std::vector<float> rms_norm(const std::vector<float> & x, const std::vector<float> & weight, float eps) {
@@ -451,7 +446,7 @@ std::vector<float> rms_norm_heads(const std::vector<float> & x, const std::vecto
 }
 
 
-// Future accelerator calls
+// Metrics for accelerator-target boundaries
 struct BackendMetrics {
   Q1Metrics transformer_q1;
   Q1Metrics lm_head_q1;
@@ -480,6 +475,13 @@ struct TopToken {
   uint32_t token = 0;
   float logit = 0.0f;
   float probability = 0.0f;
+};
+
+struct DecodeResult {
+  uint64_t position = 0;
+  std::vector<Q1Metrics> layer_q1;
+  Q1Metrics lm_head_q1;
+  std::vector<float> logits;
 };
 
 // ---------------------------------------------------------------------------
@@ -647,18 +649,8 @@ public:
   }
 
   void trace_one_token(uint32_t token, uint32_t top_k) {
-    const uint64_t position = decode_.tokens;
-    decode_.tokens++;
-    decode_.layers += shape_.n_layer;
-    decode_.rms_norms += uint64_t(shape_.n_layer) * 5 + 1;
-    decode_.q1_backend_calls += uint64_t(shape_.n_layer) * 7 + 1;
-    decode_.attention_backend_calls += shape_.n_layer;
-    decode_.residual_adds += uint64_t(shape_.n_layer) * 2;
-    decode_.silu_gate_products += shape_.n_layer;
-    decode_.lm_head_calls++;
-
     std::cout << "trace_decode token=" << token
-              << " position=" << position
+              << " position=" << decode_.tokens
               << " layers=" << shape_.n_layer
               << " hidden=" << shape_.n_embd
               << " ffn=" << shape_.n_ff
@@ -666,38 +658,12 @@ public:
               << " kv_heads=" << shape_.n_head_kv
               << " head_dim=" << shape_.head_dim << "\n";
     std::cout << "decode_step embed token_embd.weight -> hidden\n";
-    std::vector<float> hidden = embedding_lookup(token);
 
-    // Decode each layer in Bonsai/Qwen3, using the Q1_0 backend for all matrix-vector products
-    for (uint32_t layer = 0; layer < shape_.n_layer; layer++) {
-      Q1Metrics layer_q1;
-      const std::vector<float> attn_in = rms_norm(hidden, read_f32_tensor(model_, require_tensor(model_, layer_tensor(layer, "attn_norm.weight"))), shape_.rms_eps);
-      std::vector<float> q = q1_matvec_backend(layer_tensor(layer, "attn_q.weight"), attn_in, metrics_.transformer_q1, &layer_q1);
-      std::vector<float> k = q1_matvec_backend(layer_tensor(layer, "attn_k.weight"), attn_in, metrics_.transformer_q1, &layer_q1);
-      const std::vector<float> v = q1_matvec_backend(layer_tensor(layer, "attn_v.weight"), attn_in, metrics_.transformer_q1, &layer_q1);
-      q = rms_norm_heads(q, read_f32_tensor(model_, require_tensor(model_, layer_tensor(layer, "attn_q_norm.weight"))), shape_.head_dim, shape_.rms_eps);
-      k = rms_norm_heads(k, read_f32_tensor(model_, require_tensor(model_, layer_tensor(layer, "attn_k_norm.weight"))), shape_.head_dim, shape_.rms_eps);
-      apply_rope(q, shape_.n_head, position);
-      apply_rope(k, shape_.n_head_kv, position);
-      const std::vector<float> attention_out = attention_backend(layer, q, k, v);
-      const std::vector<float> projected_attention = q1_matvec_backend(layer_tensor(layer, "attn_output.weight"), attention_out, metrics_.transformer_q1, &layer_q1);
+    const DecodeResult result = decode_token(token);
 
-      std::vector<float> ffn_input = hidden;
-      for (size_t i = 0; i < ffn_input.size(); i++) ffn_input[i] += projected_attention[i];
-      const std::vector<float> ffn_normed = rms_norm(ffn_input, read_f32_tensor(model_, require_tensor(model_, layer_tensor(layer, "ffn_norm.weight"))), shape_.rms_eps);
-      const std::vector<float> ffn_gate = q1_matvec_backend(layer_tensor(layer, "ffn_gate.weight"), ffn_normed, metrics_.transformer_q1, &layer_q1);
-      const std::vector<float> ffn_up = q1_matvec_backend(layer_tensor(layer, "ffn_up.weight"), ffn_normed, metrics_.transformer_q1, &layer_q1);
-
-      std::vector<float> gated(ffn_gate.size());
-      for (size_t i = 0; i < gated.size(); i++) {
-        const float x = ffn_gate[i];
-        gated[i] = (x / (1.0f + std::exp(-x))) * ffn_up[i];
-      }
-      const std::vector<float> ffn_out = q1_matvec_backend(layer_tensor(layer, "ffn_down.weight"), gated, metrics_.transformer_q1, &layer_q1);
-      hidden = ffn_input;
-      for (size_t i = 0; i < hidden.size(); i++) hidden[i] += ffn_out[i];
-
+    for (uint32_t layer = 0; layer < result.layer_q1.size(); layer++) {
       // Reporting decode information
+      const Q1Metrics & layer_q1 = result.layer_q1[layer];
       std::cout << "decode_layer layer=" << layer
                 << " q1_backend_calls=7"
                 << " q1_rows=" << layer_q1.rows
@@ -710,10 +676,7 @@ public:
                 << " tensors=[attn_q,attn_k,attn_v,attn_output,ffn_gate,ffn_up,ffn_down]\n";
     }
 
-    Q1Metrics lm_head_q1;
-    hidden = rms_norm(hidden, read_f32_tensor(model_, require_tensor(model_, "output_norm.weight")), shape_.rms_eps);
-    const std::vector<float> logits = q1_matvec_backend("token_embd.weight", hidden, metrics_.lm_head_q1, &lm_head_q1);
-    const std::vector<TopToken> top = top_tokens(logits, top_k);
+    const std::vector<TopToken> top = top_tokens(result.logits, top_k);
     std::cout << "decode_step output_norm -> lm_head_q1 -> logits\n";
     std::cout << "decode_summary"
               << " tokens=" << decode_.tokens
@@ -724,10 +687,10 @@ public:
               << " residual_adds=" << decode_.residual_adds
               << " silu_gate_products=" << decode_.silu_gate_products
               << " lm_head_calls=" << decode_.lm_head_calls
-              << " logits=" << logits.size()
-              << " lm_head_q1_rows=" << lm_head_q1.rows
-              << " lm_head_q1_dot_elements=" << lm_head_q1.dot_elements
-              << " lm_head_q1_groups_128=" << lm_head_q1.groups_128 << "\n";
+              << " logits=" << result.logits.size()
+              << " lm_head_q1_rows=" << result.lm_head_q1.rows
+              << " lm_head_q1_dot_elements=" << result.lm_head_q1.dot_elements
+              << " lm_head_q1_groups_128=" << result.lm_head_q1.groups_128 << "\n";
     if (!top.empty()) {
       std::cout << "generated_token token=" << top.front().token
                 << " probability=" << top.front().probability
@@ -790,6 +753,77 @@ public:
   const DecodeMetrics & decode_metrics() const { return decode_; }
 
 private:
+  DecodeResult decode_token(uint32_t token) {
+    DecodeResult result;
+    result.position = decode_.tokens;
+    result.layer_q1.reserve(shape_.n_layer);
+    record_decode_metrics();
+
+    std::vector<float> hidden = embedding_lookup(token);
+    for (uint32_t layer = 0; layer < shape_.n_layer; layer++) {
+      Q1Metrics layer_q1;
+      hidden = run_layer(layer, result.position, hidden, layer_q1);
+      result.layer_q1.push_back(layer_q1);
+    }
+
+    hidden = rms_norm(hidden, read_f32_tensor(model_, require_tensor(model_, "output_norm.weight")), shape_.rms_eps);
+    result.logits = q1_matvec_backend("token_embd.weight", hidden, metrics_.lm_head_q1, &result.lm_head_q1);
+    return result;
+  }
+
+  void record_decode_metrics() {
+    decode_.tokens++;
+    decode_.layers += shape_.n_layer;
+    decode_.rms_norms += uint64_t(shape_.n_layer) * 5 + 1;
+    decode_.q1_backend_calls += uint64_t(shape_.n_layer) * 7 + 1;
+    decode_.attention_backend_calls += shape_.n_layer;
+    decode_.residual_adds += uint64_t(shape_.n_layer) * 2;
+    decode_.silu_gate_products += shape_.n_layer;
+    decode_.lm_head_calls++;
+  }
+
+  std::vector<float> run_layer(uint32_t layer,
+                               uint64_t position,
+                               const std::vector<float> & hidden,
+                               Q1Metrics & layer_q1) {
+    std::vector<float> ffn_input = run_attention_block(layer, position, hidden, layer_q1);
+    const std::vector<float> ffn_out = run_ffn_block(layer, ffn_input, layer_q1);
+    add_inplace(ffn_input, ffn_out);
+    return ffn_input;
+  }
+
+  std::vector<float> run_attention_block(uint32_t layer,
+                                         uint64_t position,
+                                         const std::vector<float> & hidden,
+                                         Q1Metrics & layer_q1) {
+    const std::vector<float> attn_in = rms_norm(hidden, read_f32_tensor(model_, require_tensor(model_, layer_tensor(layer, "attn_norm.weight"))), shape_.rms_eps);
+    std::vector<float> q = q1_matvec_backend(layer_tensor(layer, "attn_q.weight"), attn_in, metrics_.transformer_q1, &layer_q1);
+    std::vector<float> k = q1_matvec_backend(layer_tensor(layer, "attn_k.weight"), attn_in, metrics_.transformer_q1, &layer_q1);
+    const std::vector<float> v = q1_matvec_backend(layer_tensor(layer, "attn_v.weight"), attn_in, metrics_.transformer_q1, &layer_q1);
+
+    q = rms_norm_heads(q, read_f32_tensor(model_, require_tensor(model_, layer_tensor(layer, "attn_q_norm.weight"))), shape_.head_dim, shape_.rms_eps);
+    k = rms_norm_heads(k, read_f32_tensor(model_, require_tensor(model_, layer_tensor(layer, "attn_k_norm.weight"))), shape_.head_dim, shape_.rms_eps);
+    apply_rope(q, shape_.n_head, position);
+    apply_rope(k, shape_.n_head_kv, position);
+
+    const std::vector<float> attention_out = attention_backend(layer, q, k, v);
+    const std::vector<float> projected_attention = q1_matvec_backend(layer_tensor(layer, "attn_output.weight"), attention_out, metrics_.transformer_q1, &layer_q1);
+
+    std::vector<float> out = hidden;
+    add_inplace(out, projected_attention);
+    return out;
+  }
+
+  std::vector<float> run_ffn_block(uint32_t layer,
+                                   const std::vector<float> & ffn_input,
+                                   Q1Metrics & layer_q1) {
+    const std::vector<float> ffn_normed = rms_norm(ffn_input, read_f32_tensor(model_, require_tensor(model_, layer_tensor(layer, "ffn_norm.weight"))), shape_.rms_eps);
+    const std::vector<float> ffn_gate = q1_matvec_backend(layer_tensor(layer, "ffn_gate.weight"), ffn_normed, metrics_.transformer_q1, &layer_q1);
+    const std::vector<float> ffn_up = q1_matvec_backend(layer_tensor(layer, "ffn_up.weight"), ffn_normed, metrics_.transformer_q1, &layer_q1);
+    const std::vector<float> gated = silu_times_up(ffn_gate, ffn_up);
+    return q1_matvec_backend(layer_tensor(layer, "ffn_down.weight"), gated, metrics_.transformer_q1, &layer_q1);
+  }
+
   std::vector<float> embedding_lookup(uint32_t token) const {
     if (token >= shape_.n_vocab) throw std::runtime_error("token id out of range");
     // GGUF stores token embeddings as rows of token_embd.weight, quantized in Q1_0.
