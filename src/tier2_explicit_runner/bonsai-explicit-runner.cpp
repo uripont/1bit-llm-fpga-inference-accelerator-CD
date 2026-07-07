@@ -38,6 +38,7 @@ static constexpr uint32_t Q1_0_BLOCK_BYTES = sizeof(uint16_t) + QK1_0 / 8;
 struct RunConfig {
   std::string model_path = "models/bonsai-1.7b-gguf/Bonsai-1.7B-Q1_0.gguf";
   std::vector<uint32_t> tokens;
+  uint32_t top_k = 5;
 
   // To control main() runner behaviour:
   bool inspect_model = false;
@@ -68,6 +69,8 @@ RunConfig parse_args(int argc, char ** argv) {
       config.model_path = argv[++i];
     } else if (arg == "--tokens" && i + 1 < argc) {
       config.tokens = parse_tokens(argv[++i]);
+    } else if (arg == "--top-k" && i + 1 < argc) {
+      config.top_k = static_cast<uint32_t>(std::stoul(argv[++i]));
     } else if (arg == "--inspect-model") {
       config.inspect_model = true;
     } else if (arg == "--check-q1") {
@@ -75,9 +78,10 @@ RunConfig parse_args(int argc, char ** argv) {
     } else if (arg == "--trace-one-token") {
       config.trace_one_token = true;
     } else {
-      throw std::runtime_error("usage: bonsai-explicit-runner [--model path] [--tokens id[,id...]] [--inspect-model] [--check-q1] [--trace-one-token]");
+      throw std::runtime_error("usage: bonsai-explicit-runner [--model path] [--tokens id[,id...]] [--top-k n] [--inspect-model] [--check-q1] [--trace-one-token]");
     }
   }
+  if (config.top_k == 0) throw std::runtime_error("--top-k must be greater than zero");
   return config;
 }
 
@@ -328,6 +332,21 @@ std::vector<uint8_t> read_q1_0_tensor(const ModelView & model, const TensorView 
   return bytes;
 }
 
+std::vector<float> read_f32_tensor(const ModelView & model, const TensorView & tensor) {
+  if (tensor.type != GGUF_TYPE_F32) throw std::runtime_error("tensor is not F32: " + tensor.name);
+
+  uint64_t count = 1;
+  for (uint64_t dim : tensor.dims) count *= dim;
+  std::vector<float> values(count);
+  std::ifstream file(model.path, std::ios::binary);
+
+  if (!file) throw std::runtime_error("cannot reopen model: " + model.path);
+  file.seekg(static_cast<std::streamoff>(tensor.absolute_offset));
+  file.read(reinterpret_cast<char *>(values.data()), static_cast<std::streamsize>(values.size() * sizeof(float)));
+  if (!file) throw std::runtime_error("could not read F32 tensor: " + tensor.name);
+  return values;
+}
+
 std::vector<float> dequantize_q1_0_row(const std::vector<uint8_t> & row, uint64_t cols) {
   if (row.size() != q1_0_row_size(cols)) throw std::runtime_error("bad Q1_0 row byte count");
 
@@ -396,6 +415,41 @@ float dot_f32(const std::vector<float> & a, const std::vector<float> & b) {
   return sum;
 }
 
+std::vector<float> rms_norm(const std::vector<float> & x, const std::vector<float> & weight, float eps) {
+  if (x.size() != weight.size()) throw std::runtime_error("rms_norm size mismatch");
+
+  // RMSNorm scales the whole hidden vector by its root-mean-square magnitude.
+  double mean_sq = 0.0;
+  for (float value : x) mean_sq += double(value) * double(value);
+  mean_sq /= double(x.size());
+  const float scale = 1.0f / std::sqrt(float(mean_sq) + eps);
+
+  //The learned norm weight is applied elementwise after RMS scaling.
+  std::vector<float> out(x.size());
+  for (size_t i = 0; i < x.size(); i++) out[i] = x[i] * scale * weight[i];
+  return out;
+}
+
+std::vector<float> rms_norm_heads(const std::vector<float> & x, const std::vector<float> & weight, uint32_t head_dim, float eps) {
+  if (weight.size() != head_dim) throw std::runtime_error("head rms_norm weight size mismatch");
+  if (x.size() % head_dim != 0) throw std::runtime_error("head rms_norm input size mismatch");
+
+  std::vector<float> out(x.size());
+  const uint64_t heads = x.size() / head_dim;
+  for (uint64_t head = 0; head < heads; head++) {
+    // Qwen3 applies Q/K norm independently inside each attention head
+    double mean_sq = 0.0;
+    const uint64_t base = head * head_dim;
+    for (uint32_t d = 0; d < head_dim; d++) mean_sq += double(x[base + d]) * double(x[base + d]);
+    
+    
+    mean_sq /= double(head_dim);
+    const float scale = 1.0f / std::sqrt(float(mean_sq) + eps);
+    for (uint32_t d = 0; d < head_dim; d++) out[base + d] = x[base + d] * scale * weight[d];
+  }
+  return out;
+}
+
 
 // Future accelerator calls
 struct BackendMetrics {
@@ -422,7 +476,11 @@ struct LayerCache {
   std::vector<std::vector<float>> values;
 };
 
-// TODO: lm_head_backend(hidden) -> logits / argmax
+struct TopToken {
+  uint32_t token = 0;
+  float logit = 0.0f;
+  float probability = 0.0f;
+};
 
 // ---------------------------------------------------------------------------
 // Bonsai/Qwen3 shape
@@ -436,7 +494,10 @@ struct ModelShape {
   uint32_t n_head = 0;
   uint32_t n_head_kv = 0;
   uint32_t head_dim = 0;
+  uint32_t n_ctx = 0;
   uint32_t n_vocab = 0;
+  float rope_freq_base = 1000000.0f;
+  float rope_freq_scale = 1.0f;
   float rms_eps = 0.0f;
 };
 
@@ -499,7 +560,10 @@ ModelShape load_and_validate_shape(const ModelView & model) {
   shape.n_head = require_meta_u32(model, "qwen3.attention.head_count");
   shape.n_head_kv = require_meta_u32(model, "qwen3.attention.head_count_kv");
   shape.head_dim = require_meta_u32(model, "qwen3.attention.key_length");
+  shape.n_ctx = require_meta_u32(model, "qwen3.context_length");
   shape.rms_eps = require_meta_f32(model, "qwen3.attention.layer_norm_rms_epsilon");
+  shape.rope_freq_base = require_meta_f32(model, "qwen3.rope.freq_base");
+  shape.rope_freq_scale = 1.0f / require_meta_f32(model, "qwen3.rope.scaling.factor");
   shape.n_vocab = static_cast<uint32_t>(require_tensor(model, "token_embd.weight").dims.at(1));
 
   if (shape.n_layer != 28 || shape.n_embd != 2048 || shape.n_ff != 6144 ||
@@ -582,7 +646,8 @@ public:
     }
   }
 
-  void trace_one_token(uint32_t token) {
+  void trace_one_token(uint32_t token, uint32_t top_k) {
+    const uint64_t position = decode_.tokens;
     decode_.tokens++;
     decode_.layers += shape_.n_layer;
     decode_.rms_norms += uint64_t(shape_.n_layer) * 5 + 1;
@@ -593,6 +658,7 @@ public:
     decode_.lm_head_calls++;
 
     std::cout << "trace_decode token=" << token
+              << " position=" << position
               << " layers=" << shape_.n_layer
               << " hidden=" << shape_.n_embd
               << " ffn=" << shape_.n_ff
@@ -600,27 +666,36 @@ public:
               << " kv_heads=" << shape_.n_head_kv
               << " head_dim=" << shape_.head_dim << "\n";
     std::cout << "decode_step embed token_embd.weight -> hidden\n";
-    std::vector<float> hidden(shape_.n_embd);
-    for (uint64_t i = 0; i < hidden.size(); i++) hidden[i] = std::sin(float(i) * 0.007f);
+    std::vector<float> hidden = embedding_lookup(token);
 
     // Decode each layer in Bonsai/Qwen3, using the Q1_0 backend for all matrix-vector products
     for (uint32_t layer = 0; layer < shape_.n_layer; layer++) {
       Q1Metrics layer_q1;
-      const std::vector<float> q = q1_matvec_backend(layer_tensor(layer, "attn_q.weight"), hidden, metrics_.transformer_q1, &layer_q1);
-      const std::vector<float> k = q1_matvec_backend(layer_tensor(layer, "attn_k.weight"), hidden, metrics_.transformer_q1, &layer_q1);
-      const std::vector<float> v = q1_matvec_backend(layer_tensor(layer, "attn_v.weight"), hidden, metrics_.transformer_q1, &layer_q1);
+      const std::vector<float> attn_in = rms_norm(hidden, read_f32_tensor(model_, require_tensor(model_, layer_tensor(layer, "attn_norm.weight"))), shape_.rms_eps);
+      std::vector<float> q = q1_matvec_backend(layer_tensor(layer, "attn_q.weight"), attn_in, metrics_.transformer_q1, &layer_q1);
+      std::vector<float> k = q1_matvec_backend(layer_tensor(layer, "attn_k.weight"), attn_in, metrics_.transformer_q1, &layer_q1);
+      const std::vector<float> v = q1_matvec_backend(layer_tensor(layer, "attn_v.weight"), attn_in, metrics_.transformer_q1, &layer_q1);
+      q = rms_norm_heads(q, read_f32_tensor(model_, require_tensor(model_, layer_tensor(layer, "attn_q_norm.weight"))), shape_.head_dim, shape_.rms_eps);
+      k = rms_norm_heads(k, read_f32_tensor(model_, require_tensor(model_, layer_tensor(layer, "attn_k_norm.weight"))), shape_.head_dim, shape_.rms_eps);
+      apply_rope(q, shape_.n_head, position);
+      apply_rope(k, shape_.n_head_kv, position);
       const std::vector<float> attention_out = attention_backend(layer, q, k, v);
       const std::vector<float> projected_attention = q1_matvec_backend(layer_tensor(layer, "attn_output.weight"), attention_out, metrics_.transformer_q1, &layer_q1);
-      const std::vector<float> ffn_gate = q1_matvec_backend(layer_tensor(layer, "ffn_gate.weight"), hidden, metrics_.transformer_q1, &layer_q1);
-      const std::vector<float> ffn_up = q1_matvec_backend(layer_tensor(layer, "ffn_up.weight"), hidden, metrics_.transformer_q1, &layer_q1);
+
+      std::vector<float> ffn_input = hidden;
+      for (size_t i = 0; i < ffn_input.size(); i++) ffn_input[i] += projected_attention[i];
+      const std::vector<float> ffn_normed = rms_norm(ffn_input, read_f32_tensor(model_, require_tensor(model_, layer_tensor(layer, "ffn_norm.weight"))), shape_.rms_eps);
+      const std::vector<float> ffn_gate = q1_matvec_backend(layer_tensor(layer, "ffn_gate.weight"), ffn_normed, metrics_.transformer_q1, &layer_q1);
+      const std::vector<float> ffn_up = q1_matvec_backend(layer_tensor(layer, "ffn_up.weight"), ffn_normed, metrics_.transformer_q1, &layer_q1);
 
       std::vector<float> gated(ffn_gate.size());
       for (size_t i = 0; i < gated.size(); i++) {
         const float x = ffn_gate[i];
         gated[i] = (x / (1.0f + std::exp(-x))) * ffn_up[i];
       }
-      hidden = q1_matvec_backend(layer_tensor(layer, "ffn_down.weight"), gated, metrics_.transformer_q1, &layer_q1);
-      for (size_t i = 0; i < hidden.size(); i++) hidden[i] += projected_attention[i];
+      const std::vector<float> ffn_out = q1_matvec_backend(layer_tensor(layer, "ffn_down.weight"), gated, metrics_.transformer_q1, &layer_q1);
+      hidden = ffn_input;
+      for (size_t i = 0; i < hidden.size(); i++) hidden[i] += ffn_out[i];
 
       // Reporting decode information
       std::cout << "decode_layer layer=" << layer
@@ -636,7 +711,9 @@ public:
     }
 
     Q1Metrics lm_head_q1;
+    hidden = rms_norm(hidden, read_f32_tensor(model_, require_tensor(model_, "output_norm.weight")), shape_.rms_eps);
     const std::vector<float> logits = q1_matvec_backend("token_embd.weight", hidden, metrics_.lm_head_q1, &lm_head_q1);
+    const std::vector<TopToken> top = top_tokens(logits, top_k);
     std::cout << "decode_step output_norm -> lm_head_q1 -> logits\n";
     std::cout << "decode_summary"
               << " tokens=" << decode_.tokens
@@ -651,6 +728,17 @@ public:
               << " lm_head_q1_rows=" << lm_head_q1.rows
               << " lm_head_q1_dot_elements=" << lm_head_q1.dot_elements
               << " lm_head_q1_groups_128=" << lm_head_q1.groups_128 << "\n";
+    if (!top.empty()) {
+      std::cout << "generated_token token=" << top.front().token
+                << " probability=" << top.front().probability
+                << " logit=" << top.front().logit << "\n";
+      for (size_t i = 0; i < top.size(); i++) {
+        std::cout << "top_token rank=" << (i + 1)
+                  << " token=" << top[i].token
+                  << " probability=" << top[i].probability
+                  << " logit=" << top[i].logit << "\n";
+      }
+    }
   }
 
   void check_q1() {
@@ -702,6 +790,63 @@ public:
   const DecodeMetrics & decode_metrics() const { return decode_; }
 
 private:
+  std::vector<float> embedding_lookup(uint32_t token) const {
+    if (token >= shape_.n_vocab) throw std::runtime_error("token id out of range");
+    // GGUF stores token embeddings as rows of token_embd.weight, quantized in Q1_0.
+    const TensorView & tensor = require_tensor(model_, "token_embd.weight");
+    const std::vector<uint8_t> row = read_q1_0_row(model_, tensor, token);
+    return dequantize_q1_0_row(row, shape_.n_embd);
+  }
+
+  void apply_rope(std::vector<float> & x, uint32_t heads, uint64_t position) const {
+    if (x.size() != uint64_t(heads) * shape_.head_dim) throw std::runtime_error("RoPE input size mismatch");
+    if (shape_.head_dim % 2 != 0) throw std::runtime_error("RoPE head dimension must be even");
+
+    const uint32_t half = shape_.head_dim / 2;
+    for (uint32_t head = 0; head < heads; head++) {
+      const uint64_t base = uint64_t(head) * shape_.head_dim;
+      for (uint32_t d = 0; d < half; d++) {
+        // Qwen3 uses llama.cpp's NeoX RoPE layout: channel d pairs with d + head_dim/2 (impl detail)
+        const float theta = float(position) * shape_.rope_freq_scale /
+                            std::pow(shape_.rope_freq_base, float(2 * d) / float(shape_.head_dim));
+        const float c = std::cos(theta);
+        const float s = std::sin(theta);
+        const float x0 = x[base + d];
+        const float x1 = x[base + half + d];
+        x[base + d] = x0 * c - x1 * s;
+        x[base + half + d] = x0 * s + x1 * c;
+      }
+    }
+  }
+
+  std::vector<TopToken> top_tokens(const std::vector<float> & logits, size_t k) const {
+    if (logits.empty()) return {};
+
+    // Subtracting the max logit keeps the softmax exponentials in a stable range.
+    float max_logit = -std::numeric_limits<float>::infinity();
+    for (float logit : logits) max_logit = std::max(max_logit, logit);
+
+    double denom = 0.0;
+    for (float logit : logits) denom += std::exp(double(logit - max_logit));
+    if (denom == 0.0) throw std::runtime_error("logit softmax denominator is zero");
+
+    std::vector<uint32_t> indices(logits.size());
+    for (uint32_t i = 0; i < indices.size(); i++) indices[i] = i;
+    const size_t keep = std::min(k, indices.size());
+    // Sort only the requested top-k entries
+    std::partial_sort(indices.begin(), indices.begin() + keep, indices.end(),
+        [&](uint32_t a, uint32_t b) { return logits[a] > logits[b]; });
+
+    std::vector<TopToken> out;
+    out.reserve(keep);
+    for (size_t i = 0; i < keep; i++) {
+      const uint32_t token = indices[i];
+      // Probability is still normalized over the full vocab
+      const double probability = std::exp(double(logits[token] - max_logit)) / denom;
+      out.push_back({token, logits[token], static_cast<float>(probability)});
+    }
+    return out;
+  }
 
   std::vector<float> attention_backend(uint32_t layer,
                                        const std::vector<float> & q,
@@ -853,8 +998,8 @@ int main(int argc, char ** argv)
     if (config.inspect_model) runner.inspect();
     if (config.check_q1) runner.check_q1();
     if (config.trace_one_token) {
-      const uint32_t token = config.tokens.empty() ? 151643u : config.tokens.front();
-      runner.trace_one_token(token);
+      if (config.tokens.empty()) config.tokens.push_back(151643u);
+      for (uint32_t token : config.tokens) runner.trace_one_token(token, config.top_k);
     }
 
     bonsai_tier2::print_metrics(runner.metrics(), runner.decode_metrics());
