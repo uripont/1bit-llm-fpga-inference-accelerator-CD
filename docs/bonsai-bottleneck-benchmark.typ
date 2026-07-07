@@ -126,12 +126,17 @@ Short and medium prompt prefill is dominated by Q1_0 matrix work. At 128 and 512
 
 Early decode is also Q1_0-heavy, because each new token applies the fixed model weights while the KV history is still short. Long-context decode shifts toward attention/KV-cache traversal.
 
-== Tier 1 conclusions
+== Tier 1 conclusions: a dual-target approach
 
 The measured split identifies two clear, different regimes. At short contexts, where the model repeatedly applies fixed Q1_0 weights and attention has little history to read, the dependence is primarily arithmetic and packed weight processing: extracting one-bit signs, applying group scales, accumulating dot products, and writing output activations across many layers. On the other hand, at long contexts, attention becomes dominant. This dependence is mainly memory traffic and data movement: the KV cache grows with sequence length, and each generated token must access a larger history.
 
-Since we aim to increase throughput at all different context sizes, this first benchmark already suggests embracing a *dual-target approach*. Before assessing the SoC restrictions and architecture, the project should treat these as separate bottlenecks with different causes: one mostly arithmetic over packed weights, the other mostly memory bandwidth and cache traversal.
+Since we aim to increase throughput at all different context sizes, this first benchmark already suggests embracing a dual-target approach. Before assessing the SoC restrictions and architecture, the project should treat these as separate bottlenecks with different causes: one mostly arithmetic over packed weights, the other mostly memory bandwidth and cache traversal.
 
 = Tier 2: self-contained Bonsai C++ runner
 
 Tier 1 is the best reference for real CPU runtime behavior and understanding which were the main bottlenecks. For hardware co-design, a more direct source view is useful because the relevant work in `llama.cpp` is spread through the runtime, GGML graph execution, tensor abstractions, backend dispatch, tokenizer/runtime setup, and optimized kernels, which is complex and time-consuming. The project therefore also needs a simpler program, more adequate to the scope of the course project, that still runs the real Bonsai tensors and exposes the inference path as explicit loops and named backend functions.
+
+The Tier 2 runner is kept under `src/tier2_explicit_runner/`. The main source file is `src/tier2_explicit_runner/bonsai-explicit-runner.cpp`, and the build/run commands are documented in `src/tier2_explicit_runner/README.md`. This tier is used to inspect the GGUF tensors and extract explicit operation metrics from a self-contained C++ Bonsai forward (decode) pass, including Q1_0 matrix-vector call counts, rows, dot-product elements, groups of 128 packed weights, attention calls,...
+
+#pagebreak()
+
