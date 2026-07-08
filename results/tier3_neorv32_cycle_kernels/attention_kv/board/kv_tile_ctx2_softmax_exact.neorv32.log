@@ -1,0 +1,88 @@
+../../neorv32-setups/neorv32/sw/lib/source/neorv32_uart.c: In function 'neorv32_uart_setup':
+../../neorv32-setups/neorv32/sw/lib/source/neorv32_uart.c:92:2: warning: #warning UART0_SIM_MODE (primary UART) enabled! Sending all UART0.TX data to text.io simulation output instead of real UART0 transmitter. Use this for simulation only! [-Wcpp]
+   92 | #warning UART0_SIM_MODE (primary UART) enabled! \
+      |  ^~~~~~~
+Memory utilization:
+   text	   data	    bss	    dec	    hex	filename
+  15732	    292	   1128	  17152	   4300	main.elf
+Compiling image generator...
+Generating neorv32_imem_image.vhd
+Executable (VHD): 16024 bytes
+Installing application image to ../../neorv32-setups/neorv32/rtl/core/neorv32_imem_image.vhd
+Simulating processor using default testbench...
+GHDL simulation run parameters: -gIMEM_SIZE=16384 -gDMEM_SIZE=8192 --stop-time=20ms
+../rtl/core/neorv32_cpu.vhd:153:5:@0ms:(assertion note): [NEORV32] CPU ISA: rv32iabcmux_zaamo_zalrsc_zba_zbb_zbc_zbkb_zbkc_zbkx_zbs_zca_zcb_zfinx_zibi_zicntr_zicond_zicsr_zifencei_zihpm_zimop_zkn_zknd_zkne_zknh_zks_zksed_zksh_zkt_zmmul_sdext_sdtrig_smcntrpmf_smpmp_xcfu
+../rtl/core/neorv32_cpu.vhd:197:5:@0ms:(assertion note): [NEORV32] CPU tuning options: trace fast_mul fast_shift rf_arch=sram_sync 
+../rtl/core/neorv32_cache_ram.vhd:47:3:@0ms:(assertion note): [NEORV32] Using default CACHE RAM component.
+../rtl/core/neorv32_cache_ram.vhd:47:3:@0ms:(assertion note): [NEORV32] Using default CACHE RAM component.
+../rtl/core/neorv32_cache_ram.vhd:47:3:@0ms:(assertion note): [NEORV32] Using default CACHE RAM component.
+../rtl/core/neorv32_cache_ram.vhd:47:3:@0ms:(assertion note): [NEORV32] Using default CACHE RAM component.
+../rtl/core/neorv32_imem_rom.vhd:42:3:@0ms:(assertion note): [NEORV32] Using default IMEM ROM component (16384 bytes).
+../rtl/core/neorv32_dmem_ram.vhd:40:3:@0ms:(assertion note): [NEORV32] Using default DMEM RAM component (8192 bytes).
+../rtl/core/neorv32_trng.vhd:303:3:@0ms:(assertion note): [neoTRNG] The neoTRNG (v3.4) - A Tiny and Platform-Independent True Random Number Generator, github.com/stnolting/neoTRNG
+../rtl/core/neorv32_trng.vhd:313:3:@0ms:(assertion warning): [neoTRNG] Simulation-mode enabled (NO TRUE/PHYSICAL RANDOM)!
+../rtl/core/neorv32_tracer.vhd:254:5:@0ms:(assertion note): [NEORV32] CPU 0 trace logging enabled -> neorv32.tracer0.log
+../rtl/core/neorv32_tracer.vhd:269:5:@0ms:(assertion note): [NEORV32] CPU 1 trace logging enabled -> neorv32.tracer1.log
+../rtl/core/neorv32_debug_auth.vhd:67:3:@0ms:(assertion warning): [NEORV32] Using DEFAULT on-chip debugger authenticator. Replace by custom module.
+../rtl/core/neorv32_top.vhd:384:5:@0ms:(assertion note): [NEORV32] The NEORV32 RISC-V Processor (v01.13.02.00), github.com/stnolting/neorv32
+../rtl/core/neorv32_top.vhd:393:5:@0ms:(assertion note): [NEORV32] Processor Configuration: CPU (smp-dual-core) IMEM-ROM DMEM I-CACHE D-CACHE XBUS CLINT GPIO UART0 UART1 SPI SDI TWI TWD PWM WDT TRNG CFS NEOLED GPTMR ONEWIRE DMA SLINK SYSINFO TRACER OCD OCD-AUTH OCD-HWBP 
+../rtl/core/neorv32_top.vhd:429:5:@0ms:(assertion warning): [NEORV32] Assuming this is a simulation.
+../rtl/core/neorv32_top.vhd:441:5:@0ms:(assertion note): [NEORV32] BOOT_MODE_SELECT 2 - booting IMEM image
+../sim/neorv32_tb.vhd:147:7:@1100ns:(report note): [TB:JTAG] Resetting JTAG tap...
+../sim/neorv32_tb.vhd:152:7:@2us:(report note): [TB:JTAG] Enabling debug module...
+../sim/neorv32_tb.vhd:157:7:@6660ns:(report note): [TB:JTAG] Authenticating...
+../sim/neorv32_tb.vhd:161:9:@19460ns:(report note): [TB:JTAG] JTAG access authenticated.
+../sim/neorv32_tb.vhd:167:7:@19460ns:(report note): [TB:JTAG] Halting CPU-0...
+../sim/neorv32_tb.vhd:174:9:@40600ns:(report note): [TB:JTAG] CPU-0 halted.
+../sim/neorv32_tb.vhd:181:7:@40700ns:(report note): [TB:JTAG] Writing to memory via program buffer...
+../sim/neorv32_tb.vhd:190:9:@76300ns:(report note): [TB:JTAG] Memory write successful.
+../sim/neorv32_tb.vhd:197:7:@76400ns:(report note): [TB:JTAG] Resetting SoC and halting CPU-0...
+../sim/neorv32_tb.vhd:209:9:@110280ns:(report note): [TB:JTAG] CPU-0 reset and halted.
+../sim/neorv32_tb.vhd:216:7:@110380ns:(report note): [TB:JTAG] Resuming CPU-0...
+../sim/neorv32_tb.vhd:223:9:@131420ns:(report note): [TB:JTAG] CPU-0 resumed.
+../sim/neorv32_tb.vhd:233:7:@144320ns:(report note): [TB:JTAG] Disabling debug module...
+../sim/neorv32_tb.vhd:237:9:@157120ns:(report note): [TB:JTAG] Debug module disabled.
+backend=software_neorv32
+kernel=attention_kv_service
+baseline_role=software_pre_acc_reference
+counter_unit=cycles
+measured_region=kernel_only
+phase_cycles_role=software_phase_cycles_not_memory_wait
+input_source=synthetic_q8
+normalization_mode=softmax_exact
+heads=1
+kv_heads=1
+head_dim=32
+ctx=2
+repeats=1
+score_mac_per_call=64
+value_mac_per_call=64
+softmax_elements_per_call=2
+k_read_elements_per_call=64
+v_read_elements_per_call=64
+kv_append_elements_per_call=64
+kv_cache_elements=128
+k_read_bytes_per_call=128
+v_read_bytes_per_call=128
+kv_read_bytes_per_call=256
+kv_write_bytes_per_call=128
+kv_total_bytes_per_call=384
+score_mac=64
+value_mac=64
+softmax_elements=2
+k_read_elements=64
+v_read_elements=64
+kv_append_elements=64
+k_read_bytes=128
+v_read_bytes=128
+kv_read_bytes=256
+kv_write_bytes=128
+kv_total_bytes=384
+append_cycles=466
+score_cycles=259391
+norm_cycles=5493
+value_cycles=223419
+service_cycles=489007
+cycles=489066
+checksum=5274
+/usr/bin/ghdl-mcode:info: simulation stopped by --stop-time @20ms
