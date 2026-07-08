@@ -12,6 +12,7 @@
 
 #include <cstdint>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -33,6 +34,7 @@ static constexpr uint32_t GGUF_TYPE_F32 = 0;
 static constexpr uint32_t GGUF_TYPE_F16 = 1;
 static constexpr uint32_t GGUF_TYPE_Q1_0 = 41;
 static constexpr uint32_t QK1_0 = 128;
+static constexpr uint32_t QK8_0 = 32;
 static constexpr uint32_t Q1_0_BLOCK_BYTES = sizeof(uint16_t) + QK1_0 / 8;
 
 struct RunConfig {
@@ -247,6 +249,11 @@ struct Q1Metrics {
   uint64_t groups_128 = 0;
 };
 
+struct Q8Block {
+  float d = 0.0f;
+  std::array<int8_t, QK8_0> qs{};
+};
+
 void add_q1_metrics(Q1Metrics & dst, const Q1Metrics & src) {
   dst.calls += src.calls;
   dst.rows += src.rows;
@@ -294,6 +301,35 @@ uint64_t q1_0_row_size(uint64_t cols) {
   // GGML Q1_0 rows are a sequence of block_q1_0 groups, each covering 128 columns
   if (cols % QK1_0 != 0) throw std::runtime_error("Q1_0 row is not block-aligned");
   return (cols / QK1_0) * Q1_0_BLOCK_BYTES;
+}
+
+int8_t clamp_i8(int value) {
+  if (value > 127) return 127;
+  if (value < -128) return -128;
+  return static_cast<int8_t>(value);
+}
+
+std::vector<Q8Block> quantize_row_q8_0_ref(const std::vector<float> & x) {
+  // Activation-side quantization mirrors ggml's quantize_row_q8_0_ref(): one
+  // float scale and 32 signed i8 values per activation block.
+  if (x.size() % QK8_0 != 0) throw std::runtime_error("Q8_0 input is not block-aligned");
+
+  std::vector<Q8Block> out(x.size() / QK8_0);
+  for (size_t block = 0; block < out.size(); block++) {
+    float amax = 0.0f;
+    for (uint32_t j = 0; j < QK8_0; j++) {
+      amax = std::max(amax, std::fabs(x[block * QK8_0 + j]));
+    }
+
+    Q8Block & dst = out[block];
+    dst.d = amax / 127.0f;
+    const float id = dst.d == 0.0f ? 0.0f : 1.0f / dst.d;
+    for (uint32_t j = 0; j < QK8_0; j++) {
+      const int q = static_cast<int>(std::round(x[block * QK8_0 + j] * id));
+      dst.qs[j] = clamp_i8(q);
+    }
+  }
+  return out;
 }
 
 // Helper to read raw bytes from a tensor in the GGUF file given offset and size
@@ -385,6 +421,51 @@ float dot_q1_0_row_f32(const uint8_t * row, uint64_t row_bytes, const std::vecto
 
 float dot_q1_0_row_f32(const std::vector<uint8_t> & row, const std::vector<float> & x) {
   return dot_q1_0_row_f32(row.data(), row.size(), x);
+}
+
+float dot_q1_0_row_q8_0(const uint8_t * row,
+                        uint64_t row_bytes,
+                        const std::vector<Q8Block> & x_q8,
+                        uint64_t cols) {
+  // Scalar equivalent of ggml_vec_dot_q1_0_q8_0_generic(): each Q1_0 block
+  // spans 128 weights, split across four Q8_0 activation blocks.
+  if (row_bytes != q1_0_row_size(cols)) throw std::runtime_error("bad Q1_0 row byte count");
+  if (x_q8.size() * QK8_0 != cols) throw std::runtime_error("Q8_0 input size mismatch");
+
+  float sumf = 0.0f;
+  const uint8_t * block = row;
+  for (uint64_t base = 0; base < cols; base += QK1_0, block += Q1_0_BLOCK_BYTES) {
+    uint16_t scale_bits = 0;
+    std::memcpy(&scale_bits, block, sizeof(scale_bits));
+    const float q1_scale = fp16_to_f32(scale_bits);
+    const uint8_t * signs = block + sizeof(scale_bits);
+
+    float sumi = 0.0f;
+    const uint64_t q8_base = base / QK8_0;
+    for (uint32_t chunk = 0; chunk < QK1_0 / QK8_0; chunk++) {
+      const Q8Block & xb = x_q8[q8_base + chunk];
+      const uint8_t * bits = signs + chunk * (QK8_0 / 8);
+      const int8_t * qx = xb.qs.data();
+      int32_t sumi_block = 0;
+
+      for (uint32_t byte = 0; byte < QK8_0 / 8; byte++) {
+        const uint8_t mask = bits[byte];
+        for (uint32_t bit = 0; bit < 8; bit++) {
+          const int32_t value = static_cast<int32_t>(qx[byte * 8 + bit]);
+          sumi_block += ((mask >> bit) & 1u) ? value : -value;
+        }
+      }
+      sumi += xb.d * static_cast<float>(sumi_block);
+    }
+    sumf += q1_scale * sumi;
+  }
+  return sumf;
+}
+
+float dot_q1_0_row_q8_0(const std::vector<uint8_t> & row,
+                        const std::vector<Q8Block> & x_q8,
+                        uint64_t cols) {
+  return dot_q1_0_row_q8_0(row.data(), row.size(), x_q8, cols);
 }
 
 float dot_f32(const std::vector<float> & a, const std::vector<float> & b) {
@@ -714,38 +795,44 @@ public:
     std::vector<float> x(cols);
     for (uint64_t i = 0; i < cols; i++) x[i] = std::sin(float(i) * 0.013f);
 
+    const std::vector<Q8Block> x_q8 = quantize_row_q8_0_ref(x);
     const std::vector<float> dequant = dequantize_q1_0_row(packed, cols);
     const float ref_dot = dot_f32(dequant, x);
     const float direct_dot = dot_q1_0_row_f32(packed, x);
-    const float abs_err = std::fabs(ref_dot - direct_dot);
-    if (abs_err > 1e-4f) throw std::runtime_error("Q1_0 direct dot does not match dequantized reference");
+    const float layout_abs_err = std::fabs(ref_dot - direct_dot);
+    if (layout_abs_err > 1e-4f) throw std::runtime_error("Q1_0 direct dot does not match dequantized reference");
+
+    const float q8_dot = dot_q1_0_row_q8_0(packed, x_q8, cols);
+    const float q8_quant_abs_err = std::fabs(ref_dot - q8_dot);
 
     Q1Metrics matvec_metrics;
-    // Verify that the backend matvec matches the dequantized reference for a few rows
+    // Verify that the backend matvec matches the Q1_0 x Q8_0 target path for a few rows.
     const std::vector<float> y = q1_matvec_backend(tensor.name, x, metrics_.transformer_q1, &matvec_metrics);
     const uint64_t check_rows[] = {0, row, tensor.dims.at(1) - 1};
-    float max_matvec_err = 0.0f;
+    float max_matvec_q8_path_err = 0.0f;
     for (uint64_t check_row : check_rows) {
       const std::vector<uint8_t> row_bytes = read_q1_0_row(model_, tensor, check_row);
-      const std::vector<float> row_dequant = dequantize_q1_0_row(row_bytes, cols);
-      const float row_ref = dot_f32(row_dequant, x);
-      max_matvec_err = std::max(max_matvec_err, std::fabs(row_ref - y.at(check_row)));
+      const float row_ref = dot_q1_0_row_q8_0(row_bytes, x_q8, cols);
+      max_matvec_q8_path_err = std::max(max_matvec_q8_path_err, std::fabs(row_ref - y.at(check_row)));
     }
-    if (max_matvec_err > 1e-4f) throw std::runtime_error("Q1_0 matvec does not match dequantized reference rows");
+    if (max_matvec_q8_path_err > 1e-4f) throw std::runtime_error("Q1_0 matvec does not match Q8_0 target rows");
 
     std::cout << std::fixed << std::setprecision(6);
     std::cout << "check_q1 tensor=" << tensor.name
               << " row=" << row
               << " cols=" << cols
               << " row_bytes=" << packed.size()
-              << " groups_128=" << cols / QK1_0 << "\n";
+              << " groups_128=" << cols / QK1_0
+              << " activation_q8_blocks=" << x_q8.size() << "\n";
     std::cout << "check_q1 ref_dot=" << ref_dot
               << " direct_dot=" << direct_dot
-              << " abs_err=" << abs_err << "\n";
+              << " layout_abs_err=" << layout_abs_err
+              << " q8_dot=" << q8_dot
+              << " q8_quant_abs_err=" << q8_quant_abs_err << "\n";
     std::cout << "check_q1 matvec_rows=" << y.size()
               << " matvec_dot_elements=" << matvec_metrics.dot_elements
               << " matvec_groups_128=" << matvec_metrics.groups_128
-              << " matvec_max_ref_err=" << max_matvec_err << "\n";
+              << " matvec_max_q8_path_err=" << max_matvec_q8_path_err << "\n";
     std::cout << "check_q1=ok\n";
   }
 
@@ -954,9 +1041,12 @@ private:
     const uint64_t rows = tensor.dims[1];
     if (x.size() != cols) throw std::runtime_error("Q1 backend input size mismatch: " + tensor.name);
     const uint64_t row_bytes = q1_0_row_size(cols);
+    const std::vector<Q8Block> x_q8 = quantize_row_q8_0_ref(x);
     const std::vector<uint8_t> packed = read_q1_0_tensor(model_, tensor);
 
-    // One call computes all output rows: rows dot products, each over cols packed weights.
+    // One backend call computes all output rows. The operation target is the
+    // same as GGML's Q1_0 CPU dot path: packed Q1_0 weights times Q8_0
+    // activation blocks, one 128-weight group consuming four Q8_0 blocks.
     Q1Metrics call;
     call.calls = 1;
     call.rows = rows;
@@ -968,7 +1058,7 @@ private:
 
     std::vector<float> y(rows);
     for (uint64_t row = 0; row < rows; row++) {
-      y[row] = dot_q1_0_row_f32(packed.data() + row * row_bytes, row_bytes, x);
+      y[row] = dot_q1_0_row_q8_0(packed.data() + row * row_bytes, row_bytes, x_q8, cols);
     }
     return y;
   }
