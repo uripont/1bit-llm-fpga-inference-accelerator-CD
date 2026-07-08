@@ -1,0 +1,2 @@
+run,profile,mode,backend,kernel,counter_unit,rows,cols,q1_group,q8_block,dot_elements,q1_groups,activation_q8_blocks,cycles,cycles_per_row,cycles_per_q1_group,cycles_per_dot_element,checksum,stop_time,dmem_size,imem_size,ram_size,rom_size,fixture,measured_region,q1_input_source,input_mode
+q1_group_1row,board,neorv32_sim,software_neorv32,q1_matvec_q1_0_q8_0,cycles,1,128,128,32,128,1,4,7934,7934.000000,7934.000000,61.984375,137,5ms,8192,16384,8k,16k,synthetic,kernel_only,synthetic_packed,prequantized_q8_0
