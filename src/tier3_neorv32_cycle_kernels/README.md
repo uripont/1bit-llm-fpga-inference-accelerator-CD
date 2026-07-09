@@ -29,3 +29,21 @@ python3 src/tier3_neorv32_cycle_kernels/run-q1-matvec-benchmark.py --runner devc
 
 python3 src/tier3_neorv32_cycle_kernels/run-q1-matvec-benchmark.py --runner devcontainer --profile bonsai --variants q1_hidden_1row
 ```
+
+## Attention/KV pre-acc baseline contract
+
+`attention_scan.c` is the software pre-acceleration reference for the future attention/KV engine.
+
+- Q, K, and V are already available at the attention backend boundary,
+- the timed service appends current K/V, scans K for QK scores, applies exact softmax, scans V, and writes the attention output,
+- reported phase cycles are software phase cycles, not hardware memory-wait counters.
+
+This benchmark defines the operation shape and CPU software *cost, mostly compute-wise* (cycle count as the main proxy). Later accelerator simulations should compare how it performs to the same operation shape with hardware acceleration, as well as how such accelerated computations perform when usingnaive hardware memory access against hardware-backed, optimized streaming/FIFO memory access.
+
+Run the baselines:
+
+```bash
+python3 src/tier3_neorv32_cycle_kernels/run-attention-kv-benchmark.py --runner devcontainer --profile board
+
+python3 src/tier3_neorv32_cycle_kernels/run-attention-kv-benchmark.py --runner devcontainer --profile bonsai
+```
