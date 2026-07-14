@@ -19,6 +19,8 @@ entity cfs_reg_file is
     acknowledge_o   : out std_ulogic;
     service_o       : out service_t;
     transfer_mode_o : out transfer_mode_t;
+    matvec_rows_o   : out std_ulogic_vector(15 downto 0);
+    matvec_groups_o : out std_ulogic_vector(15 downto 0);
 
     busy_i          : in std_ulogic;
     done_i          : in std_ulogic;
@@ -60,12 +62,14 @@ end cfs_reg_file;
 
 architecture rtl of cfs_reg_file is
 
-  signal config_reg : std_ulogic_vector(31 downto 0);
+  signal config_reg, matvec_shape_reg : std_ulogic_vector(31 downto 0);
 
 begin
 
   service_o       <= config_reg(CONFIG_SERVICE_MSB_C downto CONFIG_SERVICE_LSB_C);
   transfer_mode_o <= config_reg(CONFIG_TRANSFER_BIT_C);
+  matvec_rows_o   <= matvec_shape_reg(MATVEC_ROWS_MSB_C downto MATVEC_ROWS_LSB_C);
+  matvec_groups_o <= matvec_shape_reg(MATVEC_GROUPS_MSB_C downto MATVEC_GROUPS_LSB_C);
 
   bus_access : process(rstn_i, clk_i)
     variable word_addr_v : natural range 0 to 16383;
@@ -77,6 +81,7 @@ begin
   begin
     if rstn_i = '0' then
       config_reg   <= (others => '0');
+      matvec_shape_reg <= (others => '0');
       start_o      <= '0';
       acknowledge_o <= '0';
       fifo_input_write_o <= '0';
@@ -108,6 +113,10 @@ begin
                     bus_req_i.data(CONFIG_SERVICE_MSB_C downto CONFIG_SERVICE_LSB_C);
                   config_reg(CONFIG_TRANSFER_BIT_C) <= bus_req_i.data(CONFIG_TRANSFER_BIT_C);
                 end if;
+              when REG_MATVEC_SHAPE_C =>
+                if busy_i = '0' then
+                  matvec_shape_reg <= bus_req_i.data;
+                end if;
               when REG_FIFO_IN_C =>
                 fifo_input_data_o  <= bus_req_i.data;
                 fifo_input_write_o <= '1';
@@ -132,6 +141,8 @@ begin
               bus_rsp_o.data <= status_v;
             when REG_CONFIG_C =>
               bus_rsp_o.data <= config_reg;
+            when REG_MATVEC_SHAPE_C =>
+              bus_rsp_o.data <= matvec_shape_reg;
             when REG_REQUEST_C =>
               request_v := (others => '0');
               request_v(REQUEST_INPUT_VALID_BIT_C) := input_request_valid_i;

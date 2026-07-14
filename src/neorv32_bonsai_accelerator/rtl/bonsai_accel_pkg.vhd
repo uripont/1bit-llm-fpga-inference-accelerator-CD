@@ -7,7 +7,7 @@ package bonsai_accel_pkg is
 
   -- CFS identity and interface version (major.minor.patch in bits 31:8).
   constant BONSAI_ACCEL_ID_C      : std_ulogic_vector(31 downto 0) := x"424E5341"; -- "BNSA"
-  constant BONSAI_ACCEL_VERSION_C : std_ulogic_vector(31 downto 0) := x"00010000";
+  constant BONSAI_ACCEL_VERSION_C : std_ulogic_vector(31 downto 0) := x"00010100";
 
   -- CFS word-addressed register map.
   constant REG_ID_C                : natural := 0;  -- 0x00, read-only
@@ -25,6 +25,7 @@ package bonsai_accel_pkg is
   constant REG_FIFO_IN_C           : natural := 12; -- 0x30
   constant REG_FIFO_OUT_C          : natural := 13; -- 0x34
   constant REG_FIFO_STATUS_C       : natural := 14; -- 0x38
+  constant REG_MATVEC_SHAPE_C      : natural := 15; -- 0x3c
 
   constant REG_COUNTER_COMMAND_C       : natural := 16; -- 0x40
   constant REG_COUNTER_ENGINE_C        : natural := 17; -- 0x44
@@ -80,6 +81,23 @@ package bonsai_accel_pkg is
   constant TRANSFER_CPU_PUSH_C  : transfer_mode_t := '0';
   constant TRANSFER_MEM_STREAM_C : transfer_mode_t := '1';
   constant CONFIG_TRANSFER_BIT_C : natural := 8;
+
+  -- Matvec shape register: groups per row in the low half, rows in the high half.
+  constant MATVEC_GROUPS_LSB_C : natural := 0;
+  constant MATVEC_GROUPS_MSB_C : natural := 15;
+  constant MATVEC_ROWS_LSB_C   : natural := 16;
+  constant MATVEC_ROWS_MSB_C   : natural := 31;
+
+  -- CPU_PUSH record sizes. Multi-byte fields and packed lanes are little-endian.
+  -- Q8: signed Q16 scale followed by 32 signed int8 lanes, four lanes per word.
+  -- Q1: raw GGUF FP16 scale in word 0[15:0], then 128 signs in four words.
+  -- Output: one sign-extended signed int16 result per word.
+  constant Q8_BLOCK_ELEMENTS_C  : natural := 32;
+  constant Q1_GROUP_ELEMENTS_C  : natural := 128;
+  constant Q8_BLOCKS_PER_Q1_C   : natural := 4;
+  constant Q8_BLOCK_WORDS_C     : natural := 9;
+  constant Q1_GROUP_WORDS_C     : natural := 5;
+  constant MATVEC_OUTPUT_WORDS_C : natural := 1;
 
   constant TILE_DIRECTION_INPUT_C  : std_ulogic := '0';
   constant TILE_DIRECTION_OUTPUT_C : std_ulogic := '1';

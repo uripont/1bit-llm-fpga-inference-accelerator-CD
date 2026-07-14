@@ -24,6 +24,7 @@ architecture bonsai_accel_rtl of neorv32_cfs is
   signal command_start, command_acknowledge : std_ulogic;
   signal config_service : service_t;
   signal config_transfer : transfer_mode_t;
+  signal config_matvec_rows, config_matvec_groups : std_ulogic_vector(15 downto 0);
 
   signal status_busy, status_done, status_error : std_ulogic;
   signal selected_service : service_t;
@@ -45,6 +46,24 @@ architecture bonsai_accel_rtl of neorv32_cfs is
   signal engine_input_valid, engine_input_ready : std_ulogic;
   signal engine_output_valid, engine_output_ready : std_ulogic;
   signal engine_input_data, engine_output_data : std_ulogic_vector(31 downto 0);
+
+  signal q1_transaction_valid, q1_transaction_ready, q1_transaction_direction : std_ulogic;
+  signal q1_transaction_role : tile_role_t;
+  signal q1_transaction_tile, q1_transaction_length : std_ulogic_vector(15 downto 0);
+  signal q1_input_valid, q1_input_ready, q1_output_valid, q1_output_ready : std_ulogic;
+  signal q1_input_data, q1_output_data : std_ulogic_vector(31 downto 0);
+  signal q1_launch, q1_busy, q1_done, q1_error : std_ulogic;
+  signal q1_active, q1_input_wait, q1_output_wait : std_ulogic;
+  signal q1_work : std_ulogic_vector(31 downto 0);
+
+  signal test_transaction_valid, test_transaction_ready, test_transaction_direction : std_ulogic;
+  signal test_transaction_role : tile_role_t;
+  signal test_transaction_tile, test_transaction_length : std_ulogic_vector(15 downto 0);
+  signal test_input_valid, test_input_ready, test_output_valid, test_output_ready : std_ulogic;
+  signal test_input_data, test_output_data : std_ulogic_vector(31 downto 0);
+  signal test_launch, test_busy, test_done, test_error : std_ulogic;
+  signal test_active, test_input_wait, test_output_wait : std_ulogic;
+  signal test_work : std_ulogic_vector(31 downto 0);
 
   signal stream_transaction_valid, stream_transaction_ready : std_ulogic;
   signal stream_transaction_direction : std_ulogic;
@@ -75,6 +94,44 @@ begin
   engine_control <= engine_interval and not engine_active and
                     not engine_input_wait and not engine_output_wait;
 
+  q1_launch <= engine_launch when selected_service = SERVICE_Q1_MATVEC_C else '0';
+  test_launch <= engine_launch when selected_service = SERVICE_ATTN_KV_C else '0';
+
+  transaction_valid <= q1_transaction_valid when selected_service = SERVICE_Q1_MATVEC_C
+    else test_transaction_valid;
+  transaction_direction <= q1_transaction_direction when selected_service = SERVICE_Q1_MATVEC_C
+    else test_transaction_direction;
+  transaction_role <= q1_transaction_role when selected_service = SERVICE_Q1_MATVEC_C
+    else test_transaction_role;
+  transaction_tile <= q1_transaction_tile when selected_service = SERVICE_Q1_MATVEC_C
+    else test_transaction_tile;
+  transaction_length <= q1_transaction_length when selected_service = SERVICE_Q1_MATVEC_C
+    else test_transaction_length;
+  q1_transaction_ready <= transaction_ready when selected_service = SERVICE_Q1_MATVEC_C else '0';
+  test_transaction_ready <= transaction_ready when selected_service = SERVICE_ATTN_KV_C else '0';
+
+  q1_input_valid <= engine_input_valid when selected_service = SERVICE_Q1_MATVEC_C else '0';
+  test_input_valid <= engine_input_valid when selected_service = SERVICE_ATTN_KV_C else '0';
+  q1_input_data <= engine_input_data;
+  test_input_data <= engine_input_data;
+  engine_input_ready <= q1_input_ready when selected_service = SERVICE_Q1_MATVEC_C
+    else test_input_ready;
+
+  engine_output_valid <= q1_output_valid when selected_service = SERVICE_Q1_MATVEC_C
+    else test_output_valid;
+  engine_output_data <= q1_output_data when selected_service = SERVICE_Q1_MATVEC_C
+    else test_output_data;
+  q1_output_ready <= engine_output_ready when selected_service = SERVICE_Q1_MATVEC_C else '0';
+  test_output_ready <= engine_output_ready when selected_service = SERVICE_ATTN_KV_C else '0';
+
+  engine_busy <= q1_busy when selected_service = SERVICE_Q1_MATVEC_C else test_busy;
+  engine_done <= q1_done when selected_service = SERVICE_Q1_MATVEC_C else test_done;
+  engine_error <= q1_error when selected_service = SERVICE_Q1_MATVEC_C else test_error;
+  engine_active <= q1_active when selected_service = SERVICE_Q1_MATVEC_C else test_active;
+  engine_input_wait <= q1_input_wait when selected_service = SERVICE_Q1_MATVEC_C else test_input_wait;
+  engine_output_wait <= q1_output_wait when selected_service = SERVICE_Q1_MATVEC_C else test_output_wait;
+  engine_work <= q1_work when selected_service = SERVICE_Q1_MATVEC_C else test_work;
+
   reg_file_inst : entity neorv32.cfs_reg_file
     port map (
       clk_i => clk_i,
@@ -85,6 +142,8 @@ begin
       acknowledge_o => command_acknowledge,
       service_o => config_service,
       transfer_mode_o => config_transfer,
+      matvec_rows_o => config_matvec_rows,
+      matvec_groups_o => config_matvec_groups,
       busy_i => status_busy,
       done_i => status_done,
       error_i => status_error,
@@ -147,7 +206,7 @@ begin
 
   frontend_control_inst : entity neorv32.frontend_control
     generic map (
-      TILE_WORD_CAPACITY => 4
+      TILE_WORD_CAPACITY => Q8_BLOCK_WORDS_C
     )
     port map (
       clk_i => clk_i,
@@ -227,30 +286,58 @@ begin
       error_o => stream_error
     );
 
+  q1_contract_engine_inst : entity neorv32.q1_matvec_contract_engine
+    port map (
+      clk_i => clk_i,
+      rstn_i => rstn_i,
+      launch_i => q1_launch,
+      rows_i => config_matvec_rows,
+      groups_i => config_matvec_groups,
+      transaction_valid_o => q1_transaction_valid,
+      transaction_ready_i => q1_transaction_ready,
+      transaction_direction_o => q1_transaction_direction,
+      transaction_role_o => q1_transaction_role,
+      transaction_tile_o => q1_transaction_tile,
+      transaction_length_o => q1_transaction_length,
+      input_valid_i => q1_input_valid,
+      input_ready_o => q1_input_ready,
+      input_data_i => q1_input_data,
+      output_valid_o => q1_output_valid,
+      output_ready_i => q1_output_ready,
+      output_data_o => q1_output_data,
+      busy_o => q1_busy,
+      done_o => q1_done,
+      error_o => q1_error,
+      active_o => q1_active,
+      input_wait_o => q1_input_wait,
+      output_wait_o => q1_output_wait,
+      work_o => q1_work
+    );
+
   test_engine_inst : entity neorv32.shell_test_engine
     port map (
       clk_i => clk_i,
       rstn_i => rstn_i,
-      launch_i => engine_launch,
-      transaction_valid_o => transaction_valid,
-      transaction_ready_i => transaction_ready,
-      transaction_direction_o => transaction_direction,
-      transaction_role_o => transaction_role,
-      transaction_tile_o => transaction_tile,
-      transaction_length_o => transaction_length,
-      input_valid_i => engine_input_valid,
-      input_ready_o => engine_input_ready,
-      input_data_i => engine_input_data,
-      output_valid_o => engine_output_valid,
-      output_ready_i => engine_output_ready,
-      output_data_o => engine_output_data,
-      busy_o => engine_busy,
-      done_o => engine_done,
-      error_o => engine_error,
-      active_o => engine_active,
-      input_wait_o => engine_input_wait,
-      output_wait_o => engine_output_wait,
-      work_o => engine_work
+      launch_i => test_launch,
+      transaction_valid_o => test_transaction_valid,
+      transaction_ready_i => test_transaction_ready,
+      transaction_direction_o => test_transaction_direction,
+      transaction_role_o => test_transaction_role,
+      transaction_tile_o => test_transaction_tile,
+      transaction_length_o => test_transaction_length,
+      input_valid_i => test_input_valid,
+      input_ready_o => test_input_ready,
+      input_data_i => test_input_data,
+      output_valid_o => test_output_valid,
+      output_ready_i => test_output_ready,
+      output_data_o => test_output_data,
+      busy_o => test_busy,
+      done_o => test_done,
+      error_o => test_error,
+      active_o => test_active,
+      input_wait_o => test_input_wait,
+      output_wait_o => test_output_wait,
+      work_o => test_work
     );
 
   counters_inst : entity neorv32.counter_block

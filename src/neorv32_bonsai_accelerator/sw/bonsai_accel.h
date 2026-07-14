@@ -5,7 +5,7 @@
 #include <neorv32.h>
 
 #define BONSAI_ACCEL_ID UINT32_C(0x424e5341)
-#define BONSAI_ACCEL_VERSION UINT32_C(0x00010000)
+#define BONSAI_ACCEL_VERSION UINT32_C(0x00010100)
 
 enum bonsai_accel_register {
   BONSAI_REG_ID = 0,
@@ -23,6 +23,7 @@ enum bonsai_accel_register {
   BONSAI_REG_FIFO_IN = 12,
   BONSAI_REG_FIFO_OUT = 13,
   BONSAI_REG_FIFO_STATUS = 14,
+  BONSAI_REG_MATVEC_SHAPE = 15,
   BONSAI_REG_COUNTER_COMMAND = 16,
   BONSAI_REG_COUNTER_ENGINE = 17,
   BONSAI_REG_COUNTER_ACTIVE = 18,
@@ -100,6 +101,18 @@ enum bonsai_accel_error {
 #define BONSAI_CONFIG_TRANSFER_SHIFT 8
 #define BONSAI_CONFIG_TRANSFER_MASK UINT32_C(0x00000100)
 
+#define BONSAI_MATVEC_GROUPS_SHIFT 0
+#define BONSAI_MATVEC_GROUPS_MASK UINT32_C(0x0000ffff)
+#define BONSAI_MATVEC_ROWS_SHIFT 16
+#define BONSAI_MATVEC_ROWS_MASK UINT32_C(0xffff0000)
+
+#define BONSAI_Q8_BLOCK_ELEMENTS 32u
+#define BONSAI_Q1_GROUP_ELEMENTS 128u
+#define BONSAI_Q8_BLOCKS_PER_Q1 4u
+#define BONSAI_Q8_BLOCK_WORDS 9u
+#define BONSAI_Q1_GROUP_WORDS 5u
+#define BONSAI_MATVEC_OUTPUT_WORDS 1u
+
 static inline uint32_t bonsai_accel_read(unsigned int reg) {
   return NEORV32_CFS->REG[reg];
 }
@@ -113,6 +126,12 @@ static inline uint32_t bonsai_accel_config(enum bonsai_accel_service service,
   return ((uint32_t) service & BONSAI_CONFIG_SERVICE_MASK) |
          (((uint32_t) transfer << BONSAI_CONFIG_TRANSFER_SHIFT) &
           BONSAI_CONFIG_TRANSFER_MASK);
+}
+
+static inline uint32_t bonsai_accel_matvec_shape(uint16_t rows,
+                                                 uint16_t groups_per_row) {
+  return ((uint32_t) groups_per_row << BONSAI_MATVEC_GROUPS_SHIFT) |
+         ((uint32_t) rows << BONSAI_MATVEC_ROWS_SHIFT);
 }
 
 static inline enum bonsai_accel_error bonsai_accel_status_error(uint32_t status) {
