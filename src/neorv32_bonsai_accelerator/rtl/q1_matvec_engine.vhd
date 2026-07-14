@@ -52,6 +52,8 @@ architecture rtl of q1_matvec_engine is
   signal q8_index, compute_block : natural range 0 to Q8_BLOCKS_PER_Q1_C - 1;
   signal group_index : natural range 0 to MAX_GROUPS_C - 1;
   signal group_count : natural range 1 to MAX_GROUPS_C;
+  signal row_index : natural range 0 to 65534;
+  signal row_count : natural range 1 to 65535;
   signal word_index : natural range 0 to Q8_BLOCK_WORDS_C - 1;
   signal lane_index : natural range 0 to Q8_BLOCK_ELEMENTS_C - 1;
   signal q8_values : q8_value_array_t;
@@ -115,8 +117,9 @@ begin
   transaction_tile_o <=
     std_ulogic_vector(to_unsigned(group_index * Q8_BLOCKS_PER_Q1_C + q8_index, 16))
       when state = REQUEST_Q8 else
-    std_ulogic_vector(to_unsigned(group_index, 16)) when state = REQUEST_Q1 else
-    (others => '0');
+    std_ulogic_vector(to_unsigned(row_index * group_count + group_index, 16))
+      when state = REQUEST_Q1 else
+    std_ulogic_vector(to_unsigned(row_index, 16));
   transaction_length_o <= std_ulogic_vector(to_unsigned(Q8_BLOCK_WORDS_C, 16))
     when state = REQUEST_Q8 else
     std_ulogic_vector(to_unsigned(Q1_GROUP_WORDS_C, 16)) when state = REQUEST_Q1 else
@@ -129,7 +132,8 @@ begin
   output_accept <= output_valid_o and output_ready_i;
 
   busy_o  <= '0' when (state = IDLE) or (state = ERROR_STATE) else '1';
-  done_o  <= '1' when (state = PRODUCE_OUTPUT) and (output_accept = '1') else '0';
+  done_o  <= '1' when (state = PRODUCE_OUTPUT) and (output_accept = '1') and
+                       (row_index = row_count - 1) else '0';
   error_o <= '1' when state = ERROR_STATE else '0';
   active_o <= '1' when state = COMPUTE else input_accept or output_accept;
   input_wait_o <= '1' when
@@ -147,6 +151,8 @@ begin
     variable scaled_wide_v : signed(95 downto 0);
     variable scaled_low_v, contribution_v, next_accumulator_v : signed(63 downto 0);
     variable requested_groups_v : natural range 0 to 65535;
+    variable requested_rows_v : natural range 0 to 65535;
+    variable q1_tile_count_v : unsigned(31 downto 0);
   begin
     if rstn_i = '0' then
       state             <= IDLE;
@@ -154,6 +160,8 @@ begin
       compute_block     <= 0;
       group_index       <= 0;
       group_count       <= 1;
+      row_index         <= 0;
+      row_count         <= 1;
       word_index        <= 0;
       lane_index        <= 0;
       q1_signs          <= (others => '0');
@@ -168,6 +176,7 @@ begin
             q8_index        <= 0;
             compute_block   <= 0;
             group_index     <= 0;
+            row_index       <= 0;
             word_index      <= 0;
             lane_index      <= 0;
             q1_signs        <= (others => '0');
@@ -175,10 +184,14 @@ begin
             row_accumulator <= (others => '0');
             output_result   <= (others => '0');
             requested_groups_v := to_integer(unsigned(groups_i));
-            if (unsigned(rows_i) = 1) and
+            requested_rows_v := to_integer(unsigned(rows_i));
+            q1_tile_count_v := unsigned(rows_i) * unsigned(groups_i);
+            if (requested_rows_v > 0) and
                (requested_groups_v > 0) and
-               (requested_groups_v <= MAX_GROUPS_C) then
+               (requested_groups_v <= MAX_GROUPS_C) and
+               (q1_tile_count_v <= to_unsigned(65536, 32)) then
               group_count <= requested_groups_v;
+              row_count <= requested_rows_v;
               state <= REQUEST_Q8;
             else
               state <= ERROR_STATE;
@@ -281,7 +294,18 @@ begin
 
         when PRODUCE_OUTPUT =>
           if output_accept = '1' then
-            state <= IDLE;
+            if row_index = row_count - 1 then
+              state <= IDLE;
+            else
+              row_index         <= row_index + 1;
+              group_index       <= 0;
+              q8_index          <= 0;
+              compute_block     <= 0;
+              lane_index        <= 0;
+              integer_partial   <= (others => '0');
+              row_accumulator   <= (others => '0');
+              state <= REQUEST_Q8;
+            end if;
           end if;
       end case;
     end if;

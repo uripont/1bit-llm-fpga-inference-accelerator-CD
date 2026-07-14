@@ -58,7 +58,7 @@ SIM_LOG="${BUILD_DIR}/shell-probe.log"
   --max-stack-alloc=0 \
   --ieee-asserts=disable \
   --assert-level=error \
-  --stop-time=12ms | tee "${SIM_LOG}"
+  --stop-time=15ms | tee "${SIM_LOG}"
 
 grep -q '^shell_probe=PASS$' "${SIM_LOG}"
 echo "[pass] Bonsai accelerator CFS register contract"
