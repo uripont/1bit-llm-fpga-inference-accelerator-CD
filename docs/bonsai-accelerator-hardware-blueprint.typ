@@ -57,31 +57,32 @@
 
 = Scope and Benchmark Basis
 
-This document is the pre-implementation hardware blueprint for the Bonsai accelerator. It describes the architecture, submodules, signal groups, and control FSMs that guide development. It intentionally does not lock down low-level implementation constants such as FIFO depth, exact fixed-point formats, number of compute lanes, or final bus widths, since those should be selected during RTL implementation and synthesis.
+This document is the pre-implementation hardware blueprint for the Bonsai accelerator. It describes the architecture, submodules, signal groups, and control FSMs that guide development. It fixes service boundaries, data roles, ownership, completion semantics, and evaluation rules. Low-level constants such as register offsets, FIFO depth, exact fixed-point widths, number of compute lanes, arbitration details, and final bus widths remain open for selection during RTL implementation and synthesis.
 
-The software target is Bonsai-1.7B Q1_0, a compact LLM, as previously discussed. The model image is around 242 MB. Since the course board is a Sipeed Tang Nano 9K with a Gowin LittleBee GW1NR-9 FPGA running a NEORV32 System-on-Chip (SoC), it is far too restricted to hold the full model image.
+The software target is Bonsai-1.7B Q1_0, a compact LLM, as previously discussed. The model image is around 242 MB. The course board is a Sipeed Tang Nano 9K with a Gowin LittleBee GW1NR-9 FPGA running a NEORV32 System-on-Chip (SoC), far too restricted to hold the full model image.
 
-The three-tier benchmark exploration previously done has allowed defining the scope. To recap, Tier 1 uses `llama.cpp` as the full software reference and shows two important runtime regimes: short-context inference is dominated by Q1_0 matrix operations, while long-context inference shifts toward attention and KV-cache work. Tier 2 exposes the same Bonsai path in a simpler, custom, self-contained C++ runner, which allows measurement of the repeated Q1_0 matrix-vector calls over 128-weight packed groups, plus per-layer attention over growing KV history. Tier 3 then gives reduced cycle-level kernels for the same targets, which can be implemented and measured on the NEORV32 SoC, and that we want to accelerate.
+The three-tier benchmark exploration in `docs/01-bonsai-bottleneck-benchmark.pdf` has allowed defining the scope. To recap, Tier 1 uses `llama.cpp` as the full software reference and shows two important runtime regimes: short-context inference is dominated by Q1_0 matrix operations, while long-context inference shifts toward attention and KV-cache work. Tier 2 exposes the same Bonsai path in a custom, self-contained C++ runner and measures repeated Q1_0 matrix-vector calls over 128-weight packed groups, plus per-layer attention over growing KV history. Tier 3 supplies simulated NEORV32 software-cycle baselines over board-sized and Bonsai-inspired operation shapes.
 
-Since Tier 2 is a CPU/software path, it can in principle run on a NEORV32 SoC if enough memory, storage, and simulation time are available. The exact Tier 2 C++/GGUF runner code is host-oriented, but the SoC-facing portable CPU path preserves the same backend boundaries. The fine-grained on-device measurements are restricted to Tier 3 kernels, keeping Tier 2 as the full-model accounting layer used for extrapolation.
+Tier 2 remains the full-model accounting layer used for extrapolation. Tier 3 defines the SoC-facing operation boundaries and pre-acceleration cycle references. The hardware engines will preserve those boundaries so that later results can combine accelerator measurements with Tier 2 call counts.
 
 The final architecture therefore contains two proposals, each of which addresses one of the two bottlenecks identified:
 
 #enum[
-  *Proposal A: compute-first tensor accelerator.* accelerate the Q1_0 fixed-weight matrix-vector backend used by Bonsai linear layers.
+  *Proposal A: Q1_0 by Q8_0 matrix-vector engine.* accelerate the packed fixed-weight dot-product backend used by Bonsai linear layers.
 ][
-  *Proposal B: stream and memory-management improvement.* reduce CPU communication overhead and long-context attention/KV traversal cost with FIFO/stream handshaking and latency hiding, among other possible techniques.
+  *Proposal B: streaming attention/KV engine.* execute K/V append, QK scoring, stable softmax normalization, and weighted-V accumulation while improving long-context data delivery through FIFO and memory streaming.
 ]
 
 = Common Top-Level Architecture
 
-In the proposed architecture, the accelerator is a co-processor to the NEORV32 CPU inside the SoC. The CPU is the system controller, running the Bonsai-like harness that orchestrates model execution and launches accelerator work when reaching the target workloads. As discussed, the *accelerator focuses on providing the demonstration of two services*: a Q1_0 tensor service and a stream-based attention/KV service.
+In the proposed architecture, the accelerator is a co-processor to the NEORV32 CPU inside the SoC. The CPU is the system controller, running the Bonsai-like harness that orchestrates model execution and launches accelerator work at the target service boundaries. The accelerator provides two services: a Q1_0 by Q8_0 matrix-vector service and a streaming attention/KV service.
 
 #figure(
   align(center)[
     #grid(
-      columns: (1.0fr, auto, 1.15fr, auto, 1.15fr, auto, 1.35fr),
-      align: center + horizon,
+      columns: (0.95fr, auto, 1.1fr, auto, 1.15fr, auto, 1.3fr),
+      column-gutter: 0.35em,
+      align: center + top,
       block([*NEORV32 CPU*\
       driver\
       benchmark\
@@ -90,275 +91,213 @@ In the proposed architecture, the accelerator is a co-processor to the NEORV32 C
       grid(
         columns: (1fr,),
         row-gutter: 0.35em,
-        block([*CFS register interface*\
-        control/status\
-        mode/config\
+        block([*CFS interface*\
+        control / config\
         descriptors], fill: control-fill),
-        block([*FIFO / stream front end*\
-        input burst\
-        valid/ready\
-        output drain], fill: stream-fill),
       ),
       arrow,
       grid(
         columns: (1fr,),
         row-gutter: 0.35em,
         block([*Accelerator top*\
-        command FSM\
-        engine select\
+        FSM / engine select\
         counters], fill: control-fill),
-        block([*Local buffer bank*\
-        x / weights\
-        Q/K/V\
-        output], fill: stream-fill),
+        engine-frame("Memory front end", fill: stream-fill)[
+          #grid(
+            columns: (1fr, 1fr),
+            column-gutter: 0.25em,
+            block([*CPU FIFO*], fill: stream-fill),
+            block([*PSRAM streamer*], fill: stream-fill),
+          )
+          #v(0.25em)
+          #align(center)[*tile control / buffers*]
+        ],
       ),
       arrow,
       grid(
         columns: (1fr,),
         row-gutter: 0.35em,
-        block([*Q1_0 matvec engine*\
-        packed signs\
-        group scales\
-        reductions], fill: compute-fill),
-        block([*Attention/KV stream engine*\
-        KV traversal\
-        QK scores\
-        weighted V output], fill: stream-fill),
+        block([*Q1/Q8 engine*\
+        signs / scales / reduce], fill: compute-fill),
+        block([*Attention/KV engine*\
+        append / QK / softmax / V], fill: stream-fill),
       ),
     )
   ],
-  caption: [Common architecture used by both proposals. The upper lane is the CFS control path: the CPU configures `accelerator_top`, which runs the command FSM, selects the engine, and exposes counters/status. The lower lane is the data path: bulk payloads enter through the FIFO/stream front end, are staged in local buffers, and are consumed by either the Q1_0 matvec engine or the attention/KV stream engine.],
+  caption: [Common architecture used by both proposals. CFS carries commands and counters to `accel_top`, which selects the engine and data path. Memory management selects `CPU_PUSH`, where software provides FIFO payloads, or `MEM_STREAM`, where the PSRAM streamer moves descriptor-addressed tiles. Both modes share the tile buffers and engines, isolating data-delivery gains from compute-engine gains.],
 )
-
-#pagebreak()
 
 = Top-Level Modules and Signal Groups
 
-This section defines the shared accelerator shell before specifying the two engines. The goal is to fix the module boundaries and control flow that both proposals need: CPU-visible control registers, optional FIFO/stream movement, local buffering, engine dispatch, status, and counters. The exact Q1_0 datapath and the exact attention/KV datapath are intentionally left as black-box services.
+This section fixes the architectural contract shared by both engines: CPU-visible command and status state, one of two data-delivery modes, role-tagged tile staging, engine dispatch, completion, and counters. Register encoding and cycle-level wiring remain RTL decisions.
 
 == Top-Level Submodules
 
 #table(
   columns: (1.15fr, 2.65fr, 1.5fr),
   stroke: (x, y) => if y == 0 { (bottom: 0.75pt) } else { none },
-  table.header([Submodule], [Responsibility], [Stored state]),
-  [`cfs_reg_file`], [CPU-visible memory-mapped control/status interface. Holds the command descriptor, start/clear bits, mode selection, and readable status/counters.], [descriptor fields, status bits],
-  [`stream_frontend`], [FIFO/stream data ingress and egress. Accepts burst payloads from the CPU-side interface and drains result words back to software.], [FIFO levels, route tags],
-  [`local_buffer_bank`], [Shared staging memory between stream input and engines. Stores input vector tiles, packed weight groups, Q/K/V tiles, and output words.], [buffer valid bits, read/write pointers],
-  [`accel_top`], [Main command controller. Reads the descriptor, checks resources, selects one engine, launches work, waits for completion, and publishes final status.], [mode, active engine, command state],
-  [`q1_matvec_engine`], [Proposal A service endpoint. Consumes local-buffered vector/weight data and produces matrix-vector results.], [engine-local state],
-  [`attn_kv_engine`], [Proposal B attention/KV service endpoint. Consumes Q/K/V data through the stream/local-buffer path and produces attention output.], [engine-local state],
-  [`counter_block`], [Performance and debug counters shared by both proposals: total cycles, CPU-blocked cycles, FIFO stalls, engine-active cycles, and command completions.], [cycle and event counters],
+  table.header([Submodule], [Responsibility], [Architectural state]),
+  [`cfs_reg_file`], [CPU-visible CFS command, descriptor, request-status, result-status, FIFO, and counter access point.], [command lifecycle, descriptors, request status],
+  [`frontend_control`], [Translates engine tile demand into `CPU_PUSH` FIFO service or `MEM_STREAM` memory traffic and coordinates tile placement.], [active role/tile, direction, transfer mode],
+  [`stream_frontend`], [`CPU_PUSH` tagged ingress and egress queues. Couples CPU-provided or CPU-consumed words to the active frontend request.], [FIFO occupancy, active tag],
+  [`memory_streamer`], [`MEM_STREAM` descriptor-driven reads and writes over an abstract burst-memory interface.], [burst progress, descriptor position],
+  [`local_buffer_bank`], [Shared FPGA-local storage for role-tagged tiles consumed or produced by an engine.], [tile validity, role/tile ownership, logical length],
+  [`accel_top`], [Validates a command, selects one committed service engine, coordinates frontend and engine lifecycles, and publishes terminal status.], [service mode, transfer mode, command state],
+  [`q1_matvec_engine`], [Q1_0-by-Q8_0 matrix-vector service endpoint.], [row/group/chunk progress],
+  [`attn_kv_engine`], [Attention and KV append service endpoint.], [head/context/phase progress],
+  [`counter_block`], [Captures command cycles, engine-active cycles, frontend waits, traffic, and completed work units.], [cycle and event counters],
 )
 
-The top-level shell therefore has two clear boundaries, similarly reflected in the previous diagram. On the CPU side, only `cfs_reg_file` and `stream_frontend` are visible. On the engine side, `accel_top` exposes a common launch/completion contract to either `q1_matvec_engine` or `attn_kv_engine`.
+The shell has three stable boundaries. CFS carries commands, descriptors, FIFO service, request visibility, status, and counters. The frontend presents one role-tagged tile contract regardless of transfer mode. The engine boundary presents a common lifecycle and tile-demand contract to exactly one selected engine.
+
+Each command selects one committed service mode, `Q1_MATVEC` or `ATTN_KV`, and one transfer mode, `CPU_PUSH` or `MEM_STREAM`. Its descriptor set has one entry per semantic role. `Q1_MATVEC` uses `Q8_INPUT`, `Q1_WEIGHTS`, and `OUTPUT`. `ATTN_KV` uses `QUERY`, `CURRENT_K`, `CURRENT_V`, `K_CACHE`, `V_CACHE`, and `OUTPUT`; implementations that externalize score tiles may add `SCORES`. Every entry identifies the role and logical extent; `MEM_STREAM` entries also provide the addressing and stride information needed to locate tiles.
+
+A tile transaction is identified by semantic role, tile index, direction, and logical length. In `CPU_PUSH`, the frontend publishes the current unsatisfied transaction through CFS-visible request status. Software reads request-valid plus the requested role, tile index, direction, and remaining length, then supplies matching tagged input FIFO data or drains matching tagged output FIFO data. Acceptance advances or clears that request. In `MEM_STREAM`, the same transaction selects a descriptor entry and becomes burst-memory traffic. Packet boundaries, register sequencing, and detailed backpressure behavior are defined by RTL while preserving this observable contract.
 
 == Top-Level Signal Groups
 
 #table(
-  columns: (1.25fr, 1.5fr, 1.0fr, 1.7fr),
+  columns: (1.25fr, 1.45fr, 1.55fr, 2.0fr),
   stroke: (x, y) => if y == 0 { (bottom: 0.8pt) } else { none },
-  table.header([Interface], [Direction], [Representative signals (TBD)], [Purpose]),
-  [Clock/reset],
-  [global in],
-  [
-    `clk` \
-    `rst_n`
-  ], table.cell(align: horizon)[Common clock and reset for all accelerator modules.],
-  [CFS register bus],
+  table.header([Interface group], [Direction], [Representative concepts], [Architectural contract]),
+  [Clock and reset],
+  [global input],
+  [`clock`, `reset`],
+  [Shared timing and reset domain for the accelerator shell.],
+  [CFS access],
   [#text(fill: control-text)[CPU] `<->` #text(fill: control-text)[CFS]],
-  [
-    `cfs_we` \
-    `cfs_re` \
-    `cfs_addr` \
-    `cfs_wdata` \
-    `cfs_rdata`
-  ], table.cell(align: horizon)[Memory-mapped CFS access for control, status, descriptor, and counters. Exact address layout remains implementation-defined.],
-  [Command descriptor],
-  [#text(fill: control-text)[CFS] `->` #text(fill: control-text)[top]],
-  [
-    `cmd_start` \
-    *`cmd_mode`* \
-    `cmd_clear` \
-    `cmd_error_clear` \
-    `desc_valid` \
-    `desc_shape` \
-    `desc_payload_len` \
-    `desc_result_len`
-  ], table.cell(align: horizon)[Decoded command and descriptor. `cmd_mode` selects Q1_0 matvec, attention/KV, or a stream-only diagnostic mode. Width and packing remain implementation-defined.],
-  [Status and counters],
+  [request/response, address, data],
+  [CPU access to command, descriptors, request status, tagged FIFOs, result status, and counters. Register protocol and address map are deferred to RTL.],
+  [Command and descriptors],
+  [#text(fill: control-text)[CFS] `->` #text(fill: control-text)[top/frontend]],
+  [start/clear, service mode, transfer mode, role descriptors],
+  [A validated command selects `Q1_MATVEC` or `ATTN_KV`, selects `CPU_PUSH` or `MEM_STREAM`, and supplies the role-based shape and location metadata.],
+  [Lifecycle status and counters],
   [#text(fill: control-text)[top/counters] `->` #text(fill: control-text)[CFS]],
-  [
-    `status_busy` \
-    `status_done` \
-    `status_error` \
-    `status_engine` \
-    `cnt_enable` \
-    `cnt_event` \
-    `cnt_snapshot`
-  ], table.cell(align: horizon)[CPU-readable lifecycle status, active/finished engine identity, and performance event capture.],
-  [Input stream],
-  [#text(fill: control-text)[CPU] `->` #text(fill: stream-text)[stream]],
-  [
-    `in_valid` \
-    `in_ready` \
-    `in_data` \
-    `in_last`
-  ], table.cell(align: horizon)[Input payload stream used by the FIFO/stream front end, especially for Proposal B style transfer.],
-  [Output stream],
-  [#text(fill: stream-text)[stream] `->` #text(fill: control-text)[CPU]],
-  [
-    `out_valid` \
-    `out_ready` \
-    `out_data` \
-    `out_last`
-  ], table.cell(align: horizon)[Output stream for result words, checksums, or counter snapshots.],
-  [Local buffer access],
-  [#text(fill: stream-text)[stream/buffer] `<->` #text(fill: compute-text)[engine]],
-  [
-    `buf_wr_en` \
-    `buf_wr_bank` \
-    `buf_wr_data` \
-    `buf_rd_en` \
-    `buf_rd_bank` \
-    `buf_rd_data`
-  ], table.cell(align: horizon)[Read/write access to local staging banks shared by the stream front end and selected engine.],
-  [Engine command],
-  [#text(fill: control-text)[top] `<->` #text(fill: compute-text)[engine]],
-  [
-    `engine_start` \
-    `engine_kind` \
-    `engine_busy` \
-    `engine_done` \
-    `engine_error`
-  ], table.cell(align: horizon)[Common launch/completion handshake. Only one engine is active for a command.],
-  [Engine data],
-  [#text(fill: compute-text)[engine] `<->` #text(fill: stream-text)[buffer]],
-  [
-    `engine_in_req` \
-    `engine_in_valid` \
-    `engine_out_valid` \
-    `engine_out_ready`
-  ], table.cell(align: horizon)[Generic data movement contract between selected engine and local buffers. Engine-specific meaning is defined later.],
+  [busy/done/error, selected service, event snapshots],
+  [CPU-readable command state, terminal outcome, service identity, and performance observations.],
+  [`CPU_PUSH` request status],
+  [#text(fill: stream-text)[frontend] `->` #text(fill: control-text)[CFS/CPU]],
+  [valid, role, tile, direction, remaining length],
+  [Identifies the exact tile service currently requested from software. Status remains stable until matching FIFO progress occurs or the command terminates.],
+  [Tagged FIFO service],
+  [#text(fill: control-text)[CFS/CPU] `<->` #text(fill: stream-text)[stream frontend]],
+  [valid/ready, data, role/tile tag, occupancy],
+  [Carries CPU-supplied input and CPU-consumed output for the published request. Packet-boundary mechanics and register operations are deferred to RTL.],
+  [Abstract burst memory],
+  [#text(fill: stream-text)[memory streamer] `<->` #text(fill: stream-text)[memory controller]],
+  [read/write request, address/length, data handshake, completion/error],
+  [`MEM_STREAM` converts role descriptors and tile indices into bursts. Exact controller channel pins and physical PSRAM signaling are deferred to RTL.],
+  [Role-tagged tile],
+  [#text(fill: stream-text)[frontend/buffer] `<->` #text(fill: compute-text)[engine]],
+  [request/accept, role, tile, direction, logical length, data availability],
+  [Transfers semantic tiles through shared local storage. Bank selection, ports, pointers, and arbitration are deferred to RTL.],
+  [Engine lifecycle],
+  [#text(fill: control-text)[top] `<->` #text(fill: compute-text)[selected engine]],
+  [launch/accept, service identity, busy/done/error],
+  [Exactly one engine owns a command from accepted launch through terminal completion.],
+  [Frontend milestones],
+  [#text(fill: stream-text)[frontend] `->` #text(fill: control-text)[top]],
+  [first tile ready, transfer complete, error],
+  [Provides the milestones required for launch ordering and final command completion while leaving scheduling details to RTL.],
 )
 
-With these, the high-level design of the accelerator is complete, without prematurely jumping into implementation details. The next section defines the control Finite-State Machines (FSMs) that orchestrate the top-level flow, the stream front end, and the local buffer bank, before moving to the two engines.
+These groups preserve one engine-facing contract across `CPU_PUSH` and `MEM_STREAM`, including identical semantic roles and tile indices. The following section defines the control Finite-State Machines (FSMs) that coordinate command, frontend, buffer, and engine progress.
+
+The two transfer modes form an implementation progression. `CPU_PUSH` is the straightforward first hardware integration: compute moves into the selected engine, while software still relays every payload through the CFS FIFOs. `MEM_STREAM` is the target memory architecture: the frontend uses descriptors, PSRAM bursts, and local tile buffering to move the same payloads directly and reduce CPU involvement and engine delivery stalls.
 
 = Control Finite-State Machines
 == `accel_top` Finite-State Machine
 
-`accel_top` is the main top-level controller. It validates commands, coordinates buffers/streams, launches the selected engine, and reports completion.
+`accel_top` is the main top-level controller. It validates commands, starts the selected data path, launches the selected engine after the first tile is ready, and reports completion after the final transfer finishes.
 
 #fsm-table((
-  [`RESET`], [Clear status bits, selected engine, command registers, local control flags, and counter enables.], [reset released], [`IDLE`],
-  [`IDLE`], [Keep `status_busy = 0`; wait for a new command with no uncleared result.], [`cmd_start && desc_valid` \
-  otherwise], [`LATCH_DESC` \
+  [`IDLE`], [Clear transient control on reset; hold published status and result metadata until acknowledged; accept and latch a valid command when the prior result is clear.], [valid command \ or \
+  reset/acknowledge], [`PREPARE` \ or \
   stay],
-  [`LATCH_DESC`], [Copy `cmd_mode` and descriptor fields from `cfs_reg_file` into internal command registers.], [descriptor latched], [`CHECK_RESOURCES`],
-  [`CHECK_RESOURCES`], [Validate selected mode, expected payload/result lengths, and availability of the stream/buffer path.], [valid \ or \
-  invalid], [`PREPARE_INPUT` \ or \
+  [`PREPARE`], [Set `status_busy`, validate the latched descriptor and resources, select and start the CPU-push or memory frontend, and prime the first required tile.], [first tile ready \ or \
+  fault], [`RUN` \ or \
   `ERROR`],
-  [`PREPARE_INPUT`], [Set `status_busy = 1`; request input fill when streamed input is required, or mark input ready when data is already resident.], [input ready \ or \
-  stream/buffer fault], [`START_ENGINE` \ or \
+  [`RUN`], [Launch the selected engine once, then run engine execution concurrently with frontend bank refill and output drain while counting active and stall events.], [engine complete \ or \
+  fault], [`DRAIN` \ or \
   `ERROR`],
-  [`START_ENGINE`], [Assert `engine_start` with `engine_kind` selecting either `q1_matvec_engine` or `attn_kv_engine`.], [engine accepted \ or \
-  illegal engine response], [`WAIT_ENGINE` \ or \
+  [`DRAIN`], [Keep the command busy until the final CPU-push FIFO output is drained or the final PSRAM output/KV writeback response is accepted; then snapshot counters and publish result metadata.], [final transfer complete \ or \
+  fault], [`DONE` \ or \
   `ERROR`],
-  [`WAIT_ENGINE`], [Keep `status_busy = 1`; count active/stall events and wait for selected engine completion.], [`engine_done` \ or \
-  `engine_error`], [`PUBLISH_RESULT` \ or \
-  `ERROR`],
-  [`PUBLISH_RESULT`], [Mark output buffer/FIFO as readable, snapshot counters, and prepare final status fields.], [result visible], [`DONE`],
-  [`DONE`], [Set `status_done = 1`, clear `status_busy`, and hold result/status until software acknowledges.], [`cmd_clear` \
-  new start before clear], [`IDLE` \
+  [`DONE`], [Set `status_done`, clear `status_busy`, and retain status and result metadata until software acknowledges.], [software acknowledges \ or \
+  waiting], [`IDLE` \ or \
   stay],
-  [`ERROR`], [Set `status_error = 1`, clear `status_busy`, latch error code, and block new commands.], [`cmd_error_clear` \
-  otherwise], [`IDLE` \
+  [`ERROR`], [Set `status_error`, clear `status_busy`, latch a generic fault code, and hold command state until software clears the error.], [software clears error \ or \
+  waiting], [`IDLE` \ or \
   stay],
 ))
 
-== `stream_frontend` FSM
+In `CPU_PUSH`, software services FIFO data and level/status registers while `status_busy = 1`: it supplies requested input packets and drains output packets as they become available. `status_done` follows the final output drain. In `MEM_STREAM`, completion follows the final accepted memory write response. These rules give both modes the same command boundary and avoid dependence on a drain-after-done driver sequence.
+
+== `stream_frontend` Channel Control
+
+The CPU-push frontend has independent ingress and egress channel control, allowing input refill and output drain during the same engine interval:
+
+#table(
+  columns: (0.8fr, 1.35fr, 2.7fr),
+  stroke: (x, y) => if y == 0 { (bottom: 0.75pt) } else { none },
+  table.header([Channel], [Lifecycle], [Responsibility]),
+  [Ingress], [`IDLE -> RECEIVE -> COMPLETE`], [Accept role- and tile-tagged CPU words, apply backpressure when the assigned bank is unavailable, and publish packet completion or error.],
+  [Egress], [`IDLE -> SEND -> COMPLETE`], [Expose ready output packets through FIFO level/data registers, retain words during CPU backpressure, and publish packet completion or error.],
+)
+
+Either channel can return to `IDLE` for the next tile while the other remains active. Channel faults propagate to `accel_top` through `frontend_error`.
+
+== `memory_streamer` FSM
+
+The memory streamer is the optimized data-delivery path. `frontend_control` translates role- and tile-tagged requests into descriptor-derived transfers; the streamer executes each PSRAM read or write transaction, fills local tile buffers, and writes append/output payloads back to memory.
 
 #fsm-table((
-  [`IDLE`], [Hold stream counters; keep `in_ready`/`out_valid` inactive unless a descriptor requests movement.], [input phase \ or \
-  output phase \
-  otherwise], [`ACCEPT_INPUT` \ or \
-  `SERVE_OUTPUT` \
-  stay],
-  [`ACCEPT_INPUT`], [Assert `in_ready` when target space exists; accept `in_data` on `in_valid && in_ready`.], [word accepted \ or \
-  no space \ or \
-  length/packet fault], [`ROUTE_INPUT` \ or \
-  `WAIT_SPACE` \ or \
-  `STREAM_ERROR`],
-  [`ROUTE_INPUT`], [Use descriptor context to route the accepted word into the selected local-buffer bank and increment payload count.], [more input expected \ or \
-  payload complete \  or \
-  buffer unavailable], [`ACCEPT_INPUT` \ or \
-  `FLUSH` \  or \
-  `WAIT_SPACE`],
-  [`WAIT_SPACE`], [Un-assert `in_ready` while the target FIFO or local-buffer bank cannot accept another word.], [space available \ \ or \
-  protocol fault], [`ACCEPT_INPUT` or `ROUTE_INPUT` \ or \
-  `STREAM_ERROR`],
-  [`SERVE_OUTPUT`], [Read result words from output buffer/FIFO and assert `out_valid` while data is available.], [`out_valid && out_ready`, more data \ or \
-  last result word \ or \
-  underflow], [stay \ \ or \
-  `FLUSH` \ or \
-  `STREAM_ERROR`],
-  [`FLUSH`], [Close packet boundary, check `in_last`/`out_last`, and finalize payload/result counters.], [packet consistent \ or \
-  length/last mismatch], [`STREAM_DONE` \ or \
-  `STREAM_ERROR`],
-  [`STREAM_DONE`], [Expose stream completion to `accel_top` and hold completion until acknowledged.], [top acknowledges], [`IDLE`],
-  [`STREAM_ERROR`], [Latch overflow, underflow, unexpected `last`, or length mismatch and expose fault to `accel_top`.], [error cleared], [`IDLE`],
+  [`IDLE`], [Wait for a `MEM_STREAM` transaction and latch its direction, address, length, role, tile tag, and bank as metadata.], [transaction accepted], [`REQUEST`],
+  [`REQUEST`], [Present the metadata-derived read or write request to the external-memory interface while retaining it across backpressure.], [request accepted \ or \
+  waiting \ or \
+  fault], [`TRANSFER` \ or \
+  stay \ or \
+  `ERROR`],
+  [`TRANSFER`], [For a read, place accepted response words into the selected bank; for a write, send bank words and accept the final response. Count transferred bytes, with delayed progress represented by a self-loop and wait-counter event.], [transaction complete \ or \
+  waiting \ or \
+  fault], [`COMPLETE` \ or \
+  stay \ or \
+  `ERROR`],
+  [`COMPLETE`], [Publish transaction completion and the final byte count to `frontend_control`.], [frontend acknowledges], [`IDLE`],
+  [`ERROR`], [Latch a generic transaction fault and notify `frontend_control`.], [error cleared], [`IDLE`],
 ))
 
-== `local_buffer_bank` Control FSM
+== `local_buffer_bank` Bank-State Control
 
-The local buffers are a shared staging area, and specifically not a third accelerator. They decouple CPU/stream timing from engine timing and give both engines a common data source/sink.
+The local buffers are a shared staging area. They decouple CPU/PSRAM transfer timing from engine timing and give both engines a common tiled data source and sink. Each bank tracks its own state, owner, tile index, valid length, and read/write pointers:
 
-#fsm-table((
-  [`IDLE`], [No active ownership change, valid bits and pointers retain their current values.], [fill request \ or \
-  engine read request \ or \
-  clear request], [`FILL_BANK` \ or \
-  `SERVE_ENGINE` \  or \
-  `CLEAR_BANK`],
-  [`FILL_BANK`], [Accept writes from `stream_frontend` into the selected bank and advance write pointer.], [bank filled/payload complete \ or \
-  overflow/conflict], [`MARK_READY` \ \ or \
-  `CLEAR_BANK` or error to top],
-  [`MARK_READY`], [Set bank valid bit and expose input readiness to `accel_top` and the selected engine.], [read granted \ or \
-  clear request], [`SERVE_ENGINE` \ or \
-  `CLEAR_BANK`],
-  [`SERVE_ENGINE`], [Grant read access to the selected engine and advance read pointer as the engine consumes data.], [engine releases input bank \ or \
-  read conflict], [`CAPTURE_OUTPUT` or `IDLE` \ or \
-  error to top],
-  [`CAPTURE_OUTPUT`], [Accept result words from the selected engine into output bank/FIFO and advance output pointer.], [result complete \ or \
-  output full], [`DRAIN_OUTPUT` \ or \
-  stay or error to top],
-  [`DRAIN_OUTPUT`], [Allow `stream_frontend` or CFS read path to drain result words from the output bank.], [result drained \ or \
-  drain stalled], [`CLEAR_BANK` \ or \
-  stay],
-  [`CLEAR_BANK`], [Clear selected valid flags and reset bank pointers for the next command.], [clear complete], [`IDLE`],
-))
+#table(
+  columns: (1fr, 3fr, 1.4fr),
+  stroke: (x, y) => if y == 0 { (bottom: 0.75pt) } else { none },
+  table.header([Bank state], [Meaning], [Next state]),
+  [`EMPTY`], [Available for assignment to the selected frontend or engine.], [`FILLING`],
+  [`FILLING`], [The assigned producer writes one input or output tile and advances the write pointer.], [`READY` or error],
+  [`READY`], [The complete tile is valid and available to its assigned consumer.], [`IN_USE`],
+  [`IN_USE`], [The engine consumes an input tile, or the selected frontend drains an output tile.], [`EMPTY` or error],
+)
+
+Because the banks advance independently, one bank can be `FILLING` while another is `IN_USE`. The frontend reports first-tile readiness, final transfer completion, and transfer errors to `accel_top`; detailed arbitration and the number and depth of banks remain RTL design parameters.
 
 
 == Counter Policy
 
-In terms of counters, the CPU should be able to snapshot the following events for performance analysis:
+The measurement contract exposes command and engine elapsed cycles, engine-active cycles, input, output, and frontend wait cycles, logical work, and physical frontend bytes; useful phase counters may be selected for Tier 3 comparisons. Each engine cycle is classified once as active, input wait, output wait, or control overhead, making utilization equal to active cycles divided by engine elapsed cycles. Frontend activity and waits are reported independently because tile transfer can overlap engine execution. Driver-observed service time spans command issue through final result delivery, while CPU fill, polling, drain, and blocked intervals remain separate.
 
-#list(
-  [`total_cycles`: cycles from accepted `cmd_start` to `DONE` or `ERROR`.],
-  [`engine_active_cycles`: cycles where the selected engine is busy.],
-  [`fifo_wait_cycles`: cycles where input or output transfer is blocked by valid/ready backpressure.],
-  [`buffer_wait_cycles`: cycles where an engine waits for local-buffer data or output space.],
-  [`cpu_blocked_cycles`: cycles measured for blocking software interaction, in Proposal B evaluation.],
-)
-
-This completes the top-level blueprint at the SoC level and its contract and control interface. Of course, this is to guide the design process, and can be refined as the design progresses. The next sections specialize the two rightmost services separately: first the Q1_0 matvec engine for Proposal A, then the attention/KV stream engine and FIFO/memory-management candidate choices for Proposal B.
+This completes the top-level SoC contract and control interface. The next sections specialize the Q1_0 by Q8_0 engine and the streaming attention/KV engine.
 
 #pagebreak()
 
 = Proposal A: `q1_matvec_engine`
 
-Proposal A is the compute-first tensor accelerator. The target primitive is Q1_0 matrix-vector multiplication over fixed-weight rows, because this is the repeated backend used by Bonsai linear layers. Decode naturally uses one matrix-vector product per layer operation for the current token. Prefill uses the same linear transforms repeated over prompt positions or batches, so this engine is a suitable board-sized primitive for extrapolating Bonsai impact from Tier 3 measurements.
+Proposal A is the compute-first tensor accelerator. Its target primitive is the Q1_0 by Q8_0 matrix-vector service measured in Tier 3. Decode applies this fixed-weight operation for each current token, while prefill repeats the same linear transforms over prompt positions or batches.
 
-The engine consumes local-buffered activation tiles and packed Q1_0 weight groups. Each group contains sign bits and a scale. The hardware performs sign-controlled add/sub reductions, applies the scale, accumulates the row result, and writes one output element.
+The engine boundary receives prequantized activations and packed Q1_0 records. One Q1_0 group contains 128 sign bits and one weight scale. One Q8_0 block contains 32 signed eight-bit activation values and one activation scale, so each Q1_0 group consumes four Q8_0 blocks. For each block, the hardware performs sign-controlled addition/subtraction, combines the weight and activation scales with the integer partial sum, accumulates into a wide row accumulator, and finally saturates the output to signed 16-bit form. An ingress format adapter converts GGUF FP16 weight scales into the selected internal fixed-point representation, matching the conversion included by the Tier 3 fixture path.
 
 #figure(
   align(center)[
@@ -369,25 +308,25 @@ The engine consumes local-buffered activation tiles and packed Q1_0 weight group
         row-gutter: 0.5em,
         align: center + horizon,
 
-        block([*Local input bank*\
-        activation tile\
-        x[group]], fill: stream-fill),
+        block([*Q8_0 tile bank*\
+        32 x int8\
+        activation scale], fill: stream-fill),
         arrow,
         block([*Q1 group reader*\
-        packed signs\
-        scale\
+        128 sign bits\
+        weight scale\
         row/group idx], fill: compute-fill),
         arrow,
         block([*Sign lanes*\
-        add/sub\
-        partial sums], fill: compute-fill),
+        32 add/sub\
+        integer partial], fill: compute-fill),
         arrow,
-        block([*Reduction + scale*\
-        row accumulator\
-        saturation policy (TBD)], fill: compute-fill),
+        block([*Dual-scale accumulate*\
+        weight x activation\
+        wide row accumulator], fill: compute-fill),
         arrow,
         block([*Output writer*\
-        y[row]\
+        saturate int16\
         done flag], fill: stream-fill),
       )
     ]
@@ -395,48 +334,42 @@ The engine consumes local-buffered activation tiles and packed Q1_0 weight group
   caption: [Zoom-in block diagram for `q1_matvec_engine`.],
 )
 
-== Q1_0 Matvec FSM
+== Q1_0 by Q8_0 Matvec FSM
 
-This FSM is local to `q1_matvec_engine`. It assumes `accel_top` already selected the engine and that local buffers expose the activation and packed-weight payloads through the shared engine/data contract.
+This FSM is local to `q1_matvec_engine`. Activation quantization occurs before the service boundary, matching the Tier 3 baseline. The engine consumes packed Q1_0 and Q8_0 records through the shared tile interface. A Q8 activation vector is logically reusable for every output row. Whether its blocks remain resident or are refetched depends on tile-buffer capacity; the physical-byte counters measure the implemented choice separately from logical Q8 block uses.
 
 #fsm-table((
-  [`IDLE`], [Keep `engine_busy = 0`; wait for the top-level launch handshake.], [`engine_start` with `engine_kind = q1_matvec`], [`LOAD_DESC`],
-  [`LOAD_DESC`], [Latch rows, columns/group count, buffer selectors, and output mode from the command descriptor.], [descriptor accepted \ or \
-  descriptor invalid], [`LOAD_X` \ or \
+  [`IDLE`], [Keep `engine_busy = 0`; wait for the top-level launch handshake.], [`engine_start` with `engine_kind = q1_matvec`], [`PREPARE`],
+  [`PREPARE`], [Latch dimensions, Q1/Q8 counts, buffer selectors, scale format, and output format; request or select the prequantized Q8_0 activation vector. Hold descriptor and request state during input backpressure.], [descriptor and activation ready \ or \
+  still waiting \ or \
+  descriptor/buffer fault], [`INIT_ROW` \ or \
+  `PREPARE` \ or \
   `ERROR`],
-  [`LOAD_X`], [Request or select the activation tile from `local_buffer_bank`.], [activation tile ready \ or \
-  buffer fault], [`INIT_ROW` \ or \
+  [`INIT_ROW`], [Clear the wide row accumulator and initialize the Q1-group index and four-block index for the current row.], [row initialized], [`PROCESS_GROUP`],
+  [`PROCESS_GROUP`], [Process exactly one Q1_0 group: obtain its 128 sign bits and weight scale, consume the four corresponding Q8_0 blocks of 32 values, perform sign-controlled add/sub for each block, combine each integer partial with the Q1 and Q8 scales, and accumulate all four scaled partials into the row accumulator. Hold row, group, block, and partial state when an input is unavailable. After block four, advance to the next group; after the final group, complete the row.], [waiting or more groups remain \ or \
+  final group for this row \ or \
+  protocol fault], [`PROCESS_GROUP` \ or \
+  `WRITE_ROW` \ or \
   `ERROR`],
-  [`INIT_ROW`], [Clear row accumulator and initialize `group_idx` for the current output row.], [row initialized], [`READ_GROUP`],
-  [`READ_GROUP`], [Read packed signs and scale for the current row/group.], [group word valid \ or \
-  input unavailable], [`DOT_GROUP` \ or \
-  `WAIT_INPUT`],
-  [`WAIT_INPUT`], [Hold row/group counters while waiting for buffer data.], [group word valid \ or \
-  timeout/protocol fault], [`DOT_GROUP` \ or \
+  [`WRITE_ROW`], [Saturate the completed row accumulator to signed 16-bit form and present it to the shared output bank. Hold the row result during output backpressure; after acceptance, advance the row counter.], [output blocked \ or \
+  output accepted with more rows \ or \
+  final output accepted \ or \
+  protocol fault], [`WRITE_ROW` \ or \
+  `INIT_ROW` \ or \
+  `DONE` \ or \
   `ERROR`],
-  [`DOT_GROUP`], [Use sign bits to select add/sub operations over the activation group and produce a group partial sum.], [partial sum ready], [`ACCUM_ROW`],
-  [`ACCUM_ROW`], [Apply group scale and accumulate into the row accumulator.], [more groups \ or \
-  row complete], [`READ_GROUP` \ or \
-  `WRITE_ROW`],
-  [`WRITE_ROW`], [Write the completed row result to the output buffer path.], [output accepted \ or \
-  output blocked], [`NEXT_ROW` \ or \
-  `WAIT_OUTPUT`],
-  [`WAIT_OUTPUT`], [Hold row result until output space is available.], [output accepted \ or \
-  protocol fault], [`NEXT_ROW` \ or \
-  `ERROR`],
-  [`NEXT_ROW`], [Advance row counter and clear per-row state when more output rows remain.], [more rows \ or \
-  all rows complete], [`INIT_ROW` \ or \
-  `DONE`],
-  [`DONE`], [Assert `engine_done`, clear `engine_busy`, and expose engine-local counters.], [top acknowledges], [`IDLE`],
+  [`DONE`], [Assert `engine_done` after the final row enters the shared output bank, clear `engine_busy`, and expose engine-local counters.], [top acknowledges], [`IDLE`],
   [`ERROR`], [Assert `engine_error`, clear `engine_busy`, and latch the local failure reason.], [top clears command], [`IDLE`],
 ))
+
+Engine completion marks completion of Q1_0 by Q8_0 computation and local result production. Command completion follows after `accel_top` observes final FIFO drain or PSRAM writeback through the shared frontend.
 
 
 = Proposal B: `attn_kv_engine`
 
-Proposal B is the stream and memory-management path. The attention/KV engine is framed this way because long-context cost is dominated by repeatedly moving and traversing K/V history, even though the service can still implement full attention semantics.
+Proposal B pairs an attention compute engine with the shared memory frontend. Long-context cost grows as every decoded token appends new K/V data and traverses the stored history. The engine owns the attention phase order and tile-level computation, while the frontend supplies cache tiles and commits append and output tiles through the selected data-delivery path.
 
-The intended service loads Q for a head, streams K over the context window to compute QK scores, normalizes the scores with a later-chosen softmax or online-softmax approximation or implementation, streams V, accumulates the weighted output, and writes the attention result.
+The reference service receives backend-ready Q, current K, and current V. Q and K have already passed their head normalization and RoPE preparation. The service appends current K/V at the decode position, streams K over the context window to compute scaled QK scores, applies stable softmax, streams V, accumulates the weighted output, and writes the signed-16 attention result. This normalization procedure is the validation mode corresponding to Tier 3.
 
 #figure(
   align(center)[
@@ -447,12 +380,13 @@ The intended service loads Q for a head, streams K over the context window to co
         row-gutter: 0.5em,
         align: center + horizon,
 
-        block([*Q buffer*\
-        current head\
-        head_dim], fill: stream-fill),
+        block([*Q, current K/V*\
+        position\
+        GQA map], fill: stream-fill),
         arrow,
-        block([*K stream reader*\
-        context index\
+        block([*KV tile I/O*\
+        append\
+        K traversal\
         valid/ready], fill: stream-fill),
         arrow,
         block([*QK score unit*\
@@ -460,12 +394,11 @@ The intended service loads Q for a head, streams K over the context window to co
         score state], fill: compute-fill),
         arrow,
         block([*Normalizer*\
-        softmax/online\
+        stable softmax\
         denominator state], fill: compute-fill),
         arrow,
-        block([*V stream reader*\
-        weighted output\
-        accumulation\
+        block([*V tile reader*\
+        weighted sum\
         output vector], fill: stream-fill),
       )
     ]
@@ -475,55 +408,82 @@ The intended service loads Q for a head, streams K over the context window to co
 
 == Attention/KV Engine FSM
 
-It shares the same engine launch/completion contract as the Q1_0 engine, but its internal phases are organized around Q loading, K traversal, score normalization, V traversal, and output writeback.
+It shares the common engine launch/completion contract. Its semantic phases preserve the measured Tier 3 order: K/V append first, followed for each query head by Q loading and head preparation, K traversal, stable normalization, V traversal, and output writeback.
 
 #fsm-table((
-  [`IDLE`], [Keep `engine_busy = 0`; wait for the top-level launch handshake.], [`engine_start` with `engine_kind = attn_kv`], [`LOAD_DESC`],
-  [`LOAD_DESC`], [Latch head count, KV-head mapping, head dimension, context length, buffer selectors, and output mode.], [descriptor accepted \ or \
-  descriptor invalid], [`LOAD_Q` \ or \
+  [`IDLE`], [Keep `engine_busy = 0`; wait for the top-level launch handshake.], [`engine_start` with `engine_kind = attn_kv`], [`PREPARE`],
+  [`PREPARE`], [Latch head counts, head dimension, context length, append position, tile-buffer selectors, normalization mode, and output format. Hold descriptor state during backpressure.], [descriptor accepted \ or \
+  still waiting \ or \
+  descriptor invalid], [`APPEND` \ or \
+  `PREPARE` \ or \
   `ERROR`],
-  [`LOAD_Q`], [Load or select Q data for the current head from the local buffer path.], [Q ready \ or \
-  buffer fault], [`INIT_HEAD` \ or \
+  [`APPEND`], [Present the current token's K and V as an append tile, retain both in the local current-position cache view, and count logical write bytes. Hold append state until the tile interface accepts the data.], [append accepted \ or \
+  append delayed \ or \
+  protocol fault], [`PREPARE_HEAD` \ or \
+  `APPEND` \ or \
   `ERROR`],
-  [`INIT_HEAD`], [Clear score/normalization state, output accumulator, and context counters for the current head.], [head initialized], [`SCAN_K`],
-  [`SCAN_K`], [Stream K data over the context window and compute QK scores.], [more K positions \ or \
-  all K scored \ or \
-  stream fault], [`SCAN_K` \ or \
+  [`PREPARE_HEAD`], [Load or select Q for the current query head, map that head to its KV head, and clear per-head score, normalization, output, and context state. Hold the selected head while Q is unavailable.], [head ready \ or \
+  Q unavailable \ or \
+  buffer fault], [`SCORE` \ or \
+  `PREPARE_HEAD` \ or \
+  `ERROR`],
+  [`SCORE`], [Traverse K across the full context, including the local current-K view at the append position; compute scaled QK scores in context order, store every Tier 3 reference score locally, and count logical read bytes. Hold the context index and partial score when a tile is delayed.], [all scores stored \ or \
+  tile delayed \ or \
+  tile fault], [`NORMALIZE` \ or \
+  `SCORE` \ or \
+  `ERROR`],
+  [`NORMALIZE`], [Apply stable softmax to the stored scores in Tier 3 order: maximum subtraction, exponent evaluation and accumulation, then denominator division. Hold normalization state while an arithmetic unit is busy.], [normalization complete \ or \
+  arithmetic busy \ or \
+  numeric/protocol fault], [`VALUE` \ or \
   `NORMALIZE` \ or \
   `ERROR`],
-  [`NORMALIZE`], [Normalize scores using the selected softmax or online-normalization method.], [normalization complete \ or \
-  numeric/protocol fault], [`SCAN_V` \ or \
+  [`VALUE`], [Traverse V in the same context order, including the local current-V view at the append position; pair each vector with its normalized score, accumulate the weighted output, and count logical read bytes. Hold context and accumulator state when a tile is delayed.], [weighted output complete \ or \
+  tile delayed \ or \
+  tile fault], [`WRITE` \ or \
+  `VALUE` \ or \
   `ERROR`],
-  [`SCAN_V`], [Stream V data paired with normalized scores and accumulate the weighted output vector.], [more V positions \ or \
-  output complete \ or \
-  stream fault], [`SCAN_V` \ or \
-  `WRITE_OUT` \ or \
+  [`WRITE`], [Convert the completed attention output to signed-16 form and present it to the shared output bank. Hold the result during output backpressure; after acceptance, advance the query-head counter.], [output blocked \ or \
+  output accepted with more heads \ or \
+  final output accepted \ or \
+  protocol fault], [`WRITE` \ or \
+  `PREPARE_HEAD` \ or \
+  `DONE` \ or \
   `ERROR`],
-  [`WRITE_OUT`], [Write the completed attention output vector to the output buffer path.], [output accepted \ or \
-  output blocked], [`NEXT_HEAD` \ or \
-  `WAIT_OUTPUT`],
-  [`WAIT_OUTPUT`], [Hold output data until the output buffer/FIFO can accept it.], [output accepted \ or \
-  protocol fault], [`NEXT_HEAD` \ or \
-  `ERROR`],
-  [`NEXT_HEAD`], [Advance head counter and select the next Q/K/V slice when more heads remain.], [more heads \ or \
-  all heads complete], [`LOAD_Q` \ or \
-  `DONE`],
-  [`DONE`], [Assert `engine_done`, clear `engine_busy`, and expose attention/KV counters.], [top acknowledges], [`IDLE`],
+  [`DONE`], [Assert `engine_done` after the final attention result enters the shared output bank, clear `engine_busy`, and expose attention/KV counters.], [top acknowledges], [`IDLE`],
   [`ERROR`], [Assert `engine_error`, clear `engine_busy`, and latch the local failure reason.], [top clears command], [`IDLE`],
 ))
 
-== Engine-Level Evaluation Counters
+The local cache view makes the newly appended K/V available when the current context position is scanned. The shared frontend can complete the corresponding FIFO drain or PSRAM writeback in parallel, and `accel_top` holds command completion until that transfer finishes.
 
-Both engine FSMs should feed the shared `counter_block`, but the report should keep their counters conceptually separate:
+The committed Tier 3 compatibility implementation keeps every reference score in FPGA-local storage, so context sweeps extend up to the selected local score capacity. A future scalable score-storage or normalization extension is validated separately against this reference. The FSM states express per-head semantic order; a GQA-optimized tile schedule may interleave query heads mapped to one KV head so they consume a retained K/V tile while preserving each head's ordered operations and results. Logical K/V work remains equal to Tier 3, while physical frontend bytes reveal the resulting reuse.
+
+= Evaluation Contract
+
+The hardware benchmark preserves the Tier 3 operation dimensions, input formats, phase boundaries, and output checks for the compatibility profiles while adding hardware-owned elapsed, active, wait, work, and traffic measurements. The first RTL version uses `CPU_PUSH` as the straightforward hardware baseline. The optimized version uses `MEM_STREAM` with the same compute engine, allowing memory-path gains to be isolated.
+
+Memory-path comparisons use the same prepared payload image and declared result destination. Fixture generation and initial placement occur before timing. In `CPU_PUSH`, the driver relays payloads between the declared backing memory and the CFS FIFOs, including final result placement. In `MEM_STREAM`, the descriptor-driven frontend performs those transfers directly. The timed service boundary includes the complete relay or stream path through result placement, so the comparison measures the removal of CPU-mediated data movement around an unchanged engine workload.
+
+== Compatibility and Scale-Out Profiles
+
+The Tier 3 compatibility profiles establish the first correctness and software-cycle comparisons:
+
+#table(
+  columns: (0.85fr, 1.25fr, 0.8fr, 1.5fr, 0.9fr),
+  stroke: (x, y) => if y == 0 { (bottom: 0.8pt) } else { none },
+  table.header([Engine], [Board profile], [Cycles], [Bonsai profile], [Cycles]),
+  [Q1 by Q8], [`1 x 128` synthetic], [`7,934`], [`1 x 2048`, GGUF row], [`195,602`],
+  [Attention/KV], [`H=1, KVH=1, D=32, C=2`], [`489,007`], [`H=2, KVH=1, D=16, C=2`], [`494,741`],
+)
+
+These small profiles establish semantic compatibility. Hardware characterization then exercises the architecture beyond the simulation-limited Tier 3 shapes:
 
 #list(
-  [`q1_group_cycles` and `q1_output_rows`: compute work completed by the Q1_0 engine.],
-  [`q1_wait_input_cycles` and `q1_wait_output_cycles`: stalls caused by local-buffer or stream availability.],
-  [`attn_k_positions` and `attn_v_positions`: streamed context work completed by the attention/KV engine.],
-  [`attn_score_cycles`, `attn_norm_cycles`, and `attn_value_cycles`: phase-level attention timing, for extrapolation.],
-  [`attn_wait_stream_cycles`: cycles where attention is ready but the KV stream or output path is not.],
+  [Proposal A increases row and group counts to measure command startup, Q8 reuse, and sustained row throughput. Representative hidden widths remain tied to Tier 2/Bonsai shapes.],
+  [Proposal B increases context length while holding a declared head configuration fixed, up to the selected score-storage and simulation limits. Every point runs with the same engine and data under `CPU_PUSH` and `MEM_STREAM`.],
 )
 
 = Summary
 
-This document has defined the first iteration of the top-level architecture, submodules, signal groups, and control FSMs for the proposed Bonsai accelerator. We want to focus on gaining performance in both the Q1_0 matvec backend and the attention/KV long-context path, measuring with precision in simulation several set-ups, to then be able to extrapolate the impact of the accelerator on Bonsai-1.7B Q1_0 inference, which was the original motivation for this work despite the constraints of the course board. The next step is to implement the RTL for the top-level shell and both engines starting from this architecture, to validate if any assumptions need to be revised, or if the proposed FSMs and signal groups are sufficient to support this initially intended services.
+This blueprint defines a shared accelerator shell with two fixed service contracts and two selectable data-delivery paths. The Q1_0 by Q8_0 engine matches the packed matvec operation measured in Tier 3. The attention/KV engine matches the append, score, stable-softmax, and weighted-value service. `CPU_PUSH` establishes a straightforward hardware baseline, while `MEM_STREAM` uses PSRAM descriptors and local ping-pong tiles to reduce data-delivery stalls around the same compute engines, primarily targeting Proposal B.
+
+The next step is to implement the common shell and one engine at a time, validate the Tier 3 compatibility profiles, and then run the scale-out, memory-path, and board-feasibility assessments defined above. 
