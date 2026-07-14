@@ -27,7 +27,12 @@ done < <(find "${NEORV32_ROOT}/rtl/core" -type f -name '*.vhd' \
 
 "${GHDL}" -i --std=08 --work=neorv32 --workdir="${BUILD_DIR}" \
   --ieee=standard "${RTL_DIR}/bonsai_accel_pkg.vhd" \
-  "${RTL_DIR}/neorv32_cfs.vhd" "${APP_IMAGE}"
+  "${RTL_DIR}/cfs_reg_file.vhd" \
+  "${RTL_DIR}/accel_top.vhd" \
+  "${RTL_DIR}/counter_block.vhd" \
+  "${RTL_DIR}/shell_test_engine.vhd" \
+  "${RTL_DIR}/neorv32_cfs.vhd" \
+  "${APP_IMAGE}"
 
 while IFS= read -r -d '' source_file; do
   "${GHDL}" -i --std=08 --work=neorv32 --workdir="${BUILD_DIR}" \

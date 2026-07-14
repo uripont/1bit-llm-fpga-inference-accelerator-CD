@@ -42,6 +42,16 @@ package bonsai_accel_pkg is
   constant COMMAND_START_BIT_C : natural := 0;
   constant COMMAND_ACK_BIT_C   : natural := 1;
 
+  -- Status register fields.
+  constant STATUS_BUSY_BIT_C          : natural := 0;
+  constant STATUS_DONE_BIT_C          : natural := 1;
+  constant STATUS_ERROR_BIT_C         : natural := 2;
+  constant STATUS_SERVICE_LSB_C       : natural := 8;
+  constant STATUS_SERVICE_MSB_C       : natural := 9;
+  constant STATUS_TRANSFER_BIT_C      : natural := 10;
+  constant STATUS_ERROR_CODE_LSB_C    : natural := 16;
+  constant STATUS_ERROR_CODE_MSB_C    : natural := 19;
+
   -- Configuration register fields.
   subtype service_t is std_ulogic_vector(1 downto 0);
   constant SERVICE_NONE_C      : service_t := "00";
@@ -78,4 +88,3 @@ package bonsai_accel_pkg is
   constant ERROR_FRONTEND_C         : error_code_t := x"5";
 
 end package bonsai_accel_pkg;
-

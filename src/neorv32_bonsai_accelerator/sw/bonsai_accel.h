@@ -72,6 +72,16 @@ enum bonsai_accel_error {
 #define BONSAI_COMMAND_START (UINT32_C(1) << 0)
 #define BONSAI_COMMAND_ACK (UINT32_C(1) << 1)
 
+#define BONSAI_STATUS_BUSY (UINT32_C(1) << 0)
+#define BONSAI_STATUS_DONE (UINT32_C(1) << 1)
+#define BONSAI_STATUS_ERROR (UINT32_C(1) << 2)
+#define BONSAI_STATUS_SERVICE_SHIFT 8
+#define BONSAI_STATUS_SERVICE_MASK UINT32_C(0x00000300)
+#define BONSAI_STATUS_TRANSFER_SHIFT 10
+#define BONSAI_STATUS_TRANSFER_MASK UINT32_C(0x00000400)
+#define BONSAI_STATUS_ERROR_CODE_SHIFT 16
+#define BONSAI_STATUS_ERROR_CODE_MASK UINT32_C(0x000f0000)
+
 #define BONSAI_CONFIG_SERVICE_MASK UINT32_C(0x00000003)
 #define BONSAI_CONFIG_TRANSFER_SHIFT 8
 #define BONSAI_CONFIG_TRANSFER_MASK UINT32_C(0x00000100)
@@ -91,5 +101,9 @@ static inline uint32_t bonsai_accel_config(enum bonsai_accel_service service,
           BONSAI_CONFIG_TRANSFER_MASK);
 }
 
-#endif
+static inline enum bonsai_accel_error bonsai_accel_status_error(uint32_t status) {
+  return (enum bonsai_accel_error)
+      ((status & BONSAI_STATUS_ERROR_CODE_MASK) >> BONSAI_STATUS_ERROR_CODE_SHIFT);
+}
 
+#endif
