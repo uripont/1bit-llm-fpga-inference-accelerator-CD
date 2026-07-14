@@ -1,0 +1,95 @@
+#ifndef BONSAI_ACCEL_H
+#define BONSAI_ACCEL_H
+
+#include <stdint.h>
+#include <neorv32.h>
+
+#define BONSAI_ACCEL_ID UINT32_C(0x424e5341)
+#define BONSAI_ACCEL_VERSION UINT32_C(0x00010000)
+
+enum bonsai_accel_register {
+  BONSAI_REG_ID = 0,
+  BONSAI_REG_VERSION = 1,
+  BONSAI_REG_COMMAND = 2,
+  BONSAI_REG_STATUS = 3,
+  BONSAI_REG_CONFIG = 4,
+  BONSAI_REG_DESC_SELECT = 5,
+  BONSAI_REG_DESC_LENGTH = 6,
+  BONSAI_REG_DESC_BASE = 7,
+  BONSAI_REG_DESC_STRIDE = 8,
+  BONSAI_REG_REQUEST = 9,
+  BONSAI_REG_REQUEST_TILE = 10,
+  BONSAI_REG_REQUEST_REMAINING = 11,
+  BONSAI_REG_FIFO_IN = 12,
+  BONSAI_REG_FIFO_OUT = 13,
+  BONSAI_REG_FIFO_STATUS = 14,
+  BONSAI_REG_COUNTER_COMMAND = 16,
+  BONSAI_REG_COUNTER_ENGINE = 17,
+  BONSAI_REG_COUNTER_ACTIVE = 18,
+  BONSAI_REG_COUNTER_INPUT_WAIT = 19,
+  BONSAI_REG_COUNTER_OUTPUT_WAIT = 20,
+  BONSAI_REG_COUNTER_CONTROL = 21,
+  BONSAI_REG_COUNTER_FRONTEND_IN = 22,
+  BONSAI_REG_COUNTER_FRONTEND_OUT = 23,
+  BONSAI_REG_COUNTER_INPUT_BYTES = 24,
+  BONSAI_REG_COUNTER_OUTPUT_BYTES = 25,
+  BONSAI_REG_COUNTER_WORK = 26,
+};
+
+enum bonsai_accel_service {
+  BONSAI_SERVICE_NONE = 0,
+  BONSAI_SERVICE_Q1_MATVEC = 1,
+  BONSAI_SERVICE_ATTN_KV = 2,
+};
+
+enum bonsai_accel_transfer_mode {
+  BONSAI_TRANSFER_CPU_PUSH = 0,
+  BONSAI_TRANSFER_MEM_STREAM = 1,
+};
+
+enum bonsai_accel_tile_role {
+  BONSAI_ROLE_NONE = 0,
+  BONSAI_ROLE_Q8_INPUT = 1,
+  BONSAI_ROLE_Q1_WEIGHTS = 2,
+  BONSAI_ROLE_QUERY = 3,
+  BONSAI_ROLE_CURRENT_K = 4,
+  BONSAI_ROLE_CURRENT_V = 5,
+  BONSAI_ROLE_K_CACHE = 6,
+  BONSAI_ROLE_V_CACHE = 7,
+  BONSAI_ROLE_OUTPUT = 8,
+  BONSAI_ROLE_SCORES = 9,
+};
+
+enum bonsai_accel_error {
+  BONSAI_ERROR_NONE = 0,
+  BONSAI_ERROR_BAD_COMMAND = 1,
+  BONSAI_ERROR_UNSUPPORTED_MODE = 2,
+  BONSAI_ERROR_PROTOCOL = 3,
+  BONSAI_ERROR_ENGINE = 4,
+  BONSAI_ERROR_FRONTEND = 5,
+};
+
+#define BONSAI_COMMAND_START (UINT32_C(1) << 0)
+#define BONSAI_COMMAND_ACK (UINT32_C(1) << 1)
+
+#define BONSAI_CONFIG_SERVICE_MASK UINT32_C(0x00000003)
+#define BONSAI_CONFIG_TRANSFER_SHIFT 8
+#define BONSAI_CONFIG_TRANSFER_MASK UINT32_C(0x00000100)
+
+static inline uint32_t bonsai_accel_read(unsigned int reg) {
+  return NEORV32_CFS->REG[reg];
+}
+
+static inline void bonsai_accel_write(unsigned int reg, uint32_t value) {
+  NEORV32_CFS->REG[reg] = value;
+}
+
+static inline uint32_t bonsai_accel_config(enum bonsai_accel_service service,
+                                           enum bonsai_accel_transfer_mode transfer) {
+  return ((uint32_t) service & BONSAI_CONFIG_SERVICE_MASK) |
+         (((uint32_t) transfer << BONSAI_CONFIG_TRANSFER_SHIFT) &
+          BONSAI_CONFIG_TRANSFER_MASK);
+}
+
+#endif
+

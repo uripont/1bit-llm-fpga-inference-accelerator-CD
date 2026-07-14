@@ -1,0 +1,11 @@
+/sim/build/
+/sw/shell_probe/build/
+/sw/shell_probe/*.bin
+/sw/shell_probe/*.coe
+/sw/shell_probe/*.elf
+/sw/shell_probe/*.hex
+/sw/shell_probe/*.mif
+/sw/shell_probe/*.mem
+/sw/shell_probe/*.vhd
+/sw/shell_probe/*.asm
+
