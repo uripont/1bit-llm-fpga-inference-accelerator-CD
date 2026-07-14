@@ -44,18 +44,60 @@ static int metrics_are_classified(const struct command_metrics *metrics) {
              metrics->output_wait_cycles + metrics->control_cycles;
 }
 
-static int run_q1_arithmetic(uint16_t weight_scale_fp16,
+enum q1_fixture_mode {
+  Q1_FIXTURE_FIXED,
+  Q1_FIXTURE_BONSAI_ROW,
+};
+
+static uint32_t fixture_q8_word(enum q1_fixture_mode mode,
+                                unsigned int tile,
+                                unsigned int word,
+                                int32_t fixed_scale_q16) {
+  return mode == Q1_FIXTURE_BONSAI_ROW
+             ? q1_fixture_bonsai_q8_word(tile, word)
+             : q1_fixture_q8_word(
+                   tile % BONSAI_Q8_BLOCKS_PER_Q1, word, fixed_scale_q16);
+}
+
+static uint32_t fixture_q1_word(enum q1_fixture_mode mode,
+                                unsigned int group,
+                                unsigned int word,
+                                uint16_t fixed_weight_scale_fp16,
+                                uint32_t fixed_sign_word) {
+  return mode == Q1_FIXTURE_BONSAI_ROW
+             ? q1_fixture_bonsai_q1_word(group, word)
+             : q1_fixture_q1_word(word, fixed_weight_scale_fp16,
+                                  fixed_sign_word);
+}
+
+static int16_t fixture_reference(enum q1_fixture_mode mode,
+                                 unsigned int groups,
+                                 uint16_t fixed_weight_scale_fp16,
+                                 int32_t fixed_q8_scale_q16,
+                                 uint32_t fixed_sign_word) {
+  return mode == Q1_FIXTURE_BONSAI_ROW
+             ? q1_fixture_bonsai_reference_result(groups)
+             : q1_fixture_reference_result(fixed_weight_scale_fp16,
+                                           fixed_q8_scale_q16,
+                                           fixed_sign_word);
+}
+
+static int run_q1_arithmetic(enum q1_fixture_mode mode,
+                             uint16_t groups,
+                             uint16_t weight_scale_fp16,
                              int32_t q8_scale_q16,
                              uint32_t sign_word,
                              struct command_metrics *metrics,
                              uint32_t *output_word) {
-  unsigned int q8_words[BONSAI_Q8_BLOCKS_PER_Q1] = {0};
-  unsigned int q1_words = 0;
+  unsigned int next_q8_tile = 0;
+  unsigned int q8_word = 0;
+  unsigned int next_q1_group = 0;
+  unsigned int q1_word = 0;
   unsigned int output_words = 0;
   uint32_t terminal_status = UINT32_MAX;
 
   const uint32_t shape =
-      bonsai_accel_matvec_shape(Q1_FIXTURE_ROWS, Q1_FIXTURE_GROUPS);
+      bonsai_accel_matvec_shape(Q1_FIXTURE_ROWS, groups);
   bonsai_accel_write(BONSAI_REG_MATVEC_SHAPE, shape);
   if (bonsai_accel_read(BONSAI_REG_MATVEC_SHAPE) != shape) return 0;
 
@@ -85,15 +127,25 @@ static int run_q1_arithmetic(uint16_t weight_scale_fp16,
       const unsigned int words_left = remaining & 0xffffu;
       uint32_t word;
 
-      if (role == BONSAI_ROLE_Q8_INPUT &&
-          tile < BONSAI_Q8_BLOCKS_PER_Q1 && words_left > 0 &&
+      if (role == BONSAI_ROLE_Q8_INPUT && tile == next_q8_tile &&
+          tile < groups * BONSAI_Q8_BLOCKS_PER_Q1 && words_left > 0 &&
           words_left <= BONSAI_Q8_BLOCK_WORDS &&
-          q8_words[tile] == BONSAI_Q8_BLOCK_WORDS - words_left) {
-        word = q1_fixture_q8_word(tile, q8_words[tile]++, q8_scale_q16);
-      } else if (role == BONSAI_ROLE_Q1_WEIGHTS && tile == 0 &&
+          q8_word == BONSAI_Q8_BLOCK_WORDS - words_left) {
+        word = fixture_q8_word(mode, tile, q8_word, q8_scale_q16);
+        if (++q8_word == BONSAI_Q8_BLOCK_WORDS) {
+          q8_word = 0;
+          ++next_q8_tile;
+        }
+      } else if (role == BONSAI_ROLE_Q1_WEIGHTS &&
+                 tile == next_q1_group && tile < groups &&
                  words_left > 0 && words_left <= BONSAI_Q1_GROUP_WORDS &&
-                 q1_words == BONSAI_Q1_GROUP_WORDS - words_left) {
-        word = q1_fixture_q1_word(q1_words++, weight_scale_fp16, sign_word);
+                 q1_word == BONSAI_Q1_GROUP_WORDS - words_left) {
+        word = fixture_q1_word(mode, tile, q1_word, weight_scale_fp16,
+                               sign_word);
+        if (++q1_word == BONSAI_Q1_GROUP_WORDS) {
+          q1_word = 0;
+          ++next_q1_group;
+        }
       } else {
         return 0;
       }
@@ -115,29 +167,28 @@ static int run_q1_arithmetic(uint16_t weight_scale_fp16,
 
   if (terminal_status == UINT32_MAX ||
       (terminal_status & BONSAI_STATUS_DONE) == 0 ||
-      (terminal_status & BONSAI_STATUS_ERROR) != 0 || q1_words != 5 ||
+      (terminal_status & BONSAI_STATUS_ERROR) != 0 ||
+      next_q8_tile != groups * BONSAI_Q8_BLOCKS_PER_Q1 || q8_word != 0 ||
+      next_q1_group != groups || q1_word != 0 ||
       output_words != 1) {
     return 0;
-  }
-  for (unsigned int block = 0; block < BONSAI_Q8_BLOCKS_PER_Q1; ++block) {
-    if (q8_words[block] != BONSAI_Q8_BLOCK_WORDS) return 0;
   }
 
   read_metrics(metrics);
   const int valid =
       metrics_are_classified(metrics) &&
       metrics->active_cycles ==
-          BONSAI_Q8_BLOCKS_PER_Q1 * BONSAI_Q8_BLOCK_WORDS +
-          BONSAI_Q1_GROUP_WORDS + BONSAI_Q1_GROUP_ELEMENTS +
+          groups * (BONSAI_Q8_BLOCKS_PER_Q1 * BONSAI_Q8_BLOCK_WORDS +
+                    BONSAI_Q1_GROUP_WORDS + BONSAI_Q1_GROUP_ELEMENTS) +
               BONSAI_MATVEC_OUTPUT_WORDS &&
       metrics->input_wait_cycles != 0 && metrics->output_wait_cycles == 0 &&
       metrics->frontend_input_wait != 0 && metrics->frontend_output_wait != 0 &&
       metrics->input_bytes ==
-          (BONSAI_Q8_BLOCKS_PER_Q1 * BONSAI_Q8_BLOCK_WORDS +
-           BONSAI_Q1_GROUP_WORDS) * sizeof(uint32_t) &&
-      metrics->output_bytes == sizeof(uint32_t) && metrics->work == 1 &&
-      *output_word == (uint32_t)(int32_t)q1_fixture_reference_result(
-          weight_scale_fp16, q8_scale_q16, sign_word);
+          groups * (BONSAI_Q8_BLOCKS_PER_Q1 * BONSAI_Q8_BLOCK_WORDS +
+                    BONSAI_Q1_GROUP_WORDS) * sizeof(uint32_t) &&
+      metrics->output_bytes == sizeof(uint32_t) && metrics->work == groups &&
+      *output_word == (uint32_t)(int32_t)fixture_reference(
+          mode, groups, weight_scale_fp16, q8_scale_q16, sign_word);
 
   bonsai_accel_write(BONSAI_REG_COMMAND, BONSAI_COMMAND_ACK);
   return valid && bonsai_accel_read(BONSAI_REG_STATUS) == 0;
@@ -221,14 +272,12 @@ static void print_metrics(const char *prefix,
 
 int main(void) {
   struct command_metrics q1_base_metrics = {0};
-  struct command_metrics q1_weight_metrics = {0};
-  struct command_metrics q1_q8_metrics = {0};
   struct command_metrics q1_saturation_metrics = {0};
+  struct command_metrics q1_bonsai_row_metrics = {0};
   struct command_metrics attention_metrics = {0};
   uint32_t q1_base_output = 0;
-  uint32_t q1_weight_output = 0;
-  uint32_t q1_q8_output = 0;
   uint32_t q1_saturation_output = 0;
+  uint32_t q1_bonsai_row_output = 0;
 
   neorv32_uart0_setup(19200, 0);
   neorv32_uart0_printf("bonsai_shell_probe\n");
@@ -243,31 +292,24 @@ int main(void) {
   const int16_t base_reference = q1_fixture_reference_result(
       Q1_FIXTURE_WEIGHT_SCALE_FP16, Q1_FIXTURE_Q8_SCALE_Q16,
       Q1_FIXTURE_SIGN_WORD);
-  const int16_t weight_reference = q1_fixture_reference_result(
-      Q1_FIXTURE_HALF_WEIGHT_SCALE_FP16, Q1_FIXTURE_Q8_SCALE_Q16,
-      Q1_FIXTURE_INVERTED_SIGN_WORD);
-  const int16_t q8_reference = q1_fixture_reference_result(
-      Q1_FIXTURE_WEIGHT_SCALE_FP16, Q1_FIXTURE_DOUBLE_Q8_SCALE_Q16,
-      Q1_FIXTURE_SIGN_WORD);
   const int16_t saturation_reference = q1_fixture_reference_result(
       Q1_FIXTURE_WEIGHT_SCALE_FP16, Q1_FIXTURE_SATURATING_Q8_SCALE_Q16,
       Q1_FIXTURE_SIGN_WORD);
-  if (base_reference != 64 || weight_reference != -32 || q8_reference != 128 ||
-      saturation_reference != 32767 ||
+  const int16_t bonsai_row_reference =
+      q1_fixture_bonsai_reference_result(Q1_FIXTURE_BONSAI_GROUPS);
+  if (base_reference != 64 || saturation_reference != 32767 ||
       !run_q1_arithmetic(
+          Q1_FIXTURE_FIXED, Q1_FIXTURE_GROUPS,
           Q1_FIXTURE_WEIGHT_SCALE_FP16, Q1_FIXTURE_Q8_SCALE_Q16,
           Q1_FIXTURE_SIGN_WORD, &q1_base_metrics, &q1_base_output) ||
       !run_q1_arithmetic(
-          Q1_FIXTURE_HALF_WEIGHT_SCALE_FP16, Q1_FIXTURE_Q8_SCALE_Q16,
-          Q1_FIXTURE_INVERTED_SIGN_WORD, &q1_weight_metrics,
-          &q1_weight_output) ||
-      !run_q1_arithmetic(
-          Q1_FIXTURE_WEIGHT_SCALE_FP16, Q1_FIXTURE_DOUBLE_Q8_SCALE_Q16,
-          Q1_FIXTURE_SIGN_WORD, &q1_q8_metrics, &q1_q8_output) ||
-      !run_q1_arithmetic(
+          Q1_FIXTURE_FIXED, Q1_FIXTURE_GROUPS,
           Q1_FIXTURE_WEIGHT_SCALE_FP16, Q1_FIXTURE_SATURATING_Q8_SCALE_Q16,
           Q1_FIXTURE_SIGN_WORD, &q1_saturation_metrics,
           &q1_saturation_output) ||
+      !run_q1_arithmetic(
+          Q1_FIXTURE_BONSAI_ROW, Q1_FIXTURE_BONSAI_GROUPS,
+          0, 0, 0, &q1_bonsai_row_metrics, &q1_bonsai_row_output) ||
       !run_attention_probe(&attention_metrics)) {
     neorv32_uart0_printf("shell_probe=FAIL reason=cpu_push\n");
     return 1;
@@ -296,17 +338,17 @@ int main(void) {
       q1_fixture_transport_checksum(
           Q1_FIXTURE_WEIGHT_SCALE_FP16, Q1_FIXTURE_Q8_SCALE_Q16,
           Q1_FIXTURE_SIGN_WORD));
-  neorv32_uart0_printf("q1_half_weight reference=%i output=%i\n",
-                      (int32_t)weight_reference, (int32_t)q1_weight_output);
-  neorv32_uart0_printf("q1_double_q8 reference=%i output=%i\n",
-                      (int32_t)q8_reference, (int32_t)q1_q8_output);
   neorv32_uart0_printf("q1_saturation reference=%i output=%i\n",
                       (int32_t)saturation_reference,
                       (int32_t)q1_saturation_output);
+  neorv32_uart0_printf(
+      "q1_bonsai_row groups=%u elements=%u reference=%i output=%i\n",
+      Q1_FIXTURE_BONSAI_GROUPS,
+      Q1_FIXTURE_BONSAI_GROUPS * BONSAI_Q1_GROUP_ELEMENTS,
+      (int32_t)bonsai_row_reference, (int32_t)q1_bonsai_row_output);
   print_metrics("q1_base", &q1_base_metrics);
-  print_metrics("q1_half_weight", &q1_weight_metrics);
-  print_metrics("q1_double_q8", &q1_q8_metrics);
   print_metrics("q1_saturation", &q1_saturation_metrics);
+  print_metrics("q1_bonsai_row", &q1_bonsai_row_metrics);
   print_metrics("attention_probe", &attention_metrics);
   neorv32_uart0_printf("unsupported_mode_error=%u\n", (uint32_t)unsupported_error);
   neorv32_uart0_printf("shell_probe=PASS\n");

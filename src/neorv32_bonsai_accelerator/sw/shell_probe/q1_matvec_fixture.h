@@ -8,6 +8,7 @@
 // One complete Q1_0 x Q8_0 work unit: one row, one 128-element Q1 group.
 #define Q1_FIXTURE_ROWS 1u
 #define Q1_FIXTURE_GROUPS 1u
+#define Q1_FIXTURE_BONSAI_GROUPS 16u
 #define Q1_FIXTURE_WEIGHT_SCALE_FP16 UINT16_C(0x3c00) // 1.0
 #define Q1_FIXTURE_HALF_WEIGHT_SCALE_FP16 UINT16_C(0x3800) // 0.5
 #define Q1_FIXTURE_Q8_SCALE_Q16 INT32_C(256)
@@ -108,6 +109,78 @@ static inline uint32_t q1_fixture_transport_checksum(uint16_t weight_scale_fp16,
         checksum, q1_fixture_q1_word(word, weight_scale_fp16, sign_word));
   }
   return checksum;
+}
+
+static inline int8_t q1_fixture_bonsai_q8_lane(unsigned int group,
+                                                unsigned int block,
+                                                unsigned int lane) {
+  const unsigned int element = block * BONSAI_Q8_BLOCK_ELEMENTS + lane;
+  return (int8_t)((int32_t)((group * 29u + element * 17u + 5u) & 255u) - 128);
+}
+
+static inline int32_t q1_fixture_bonsai_q8_scale(unsigned int group,
+                                                  unsigned int block) {
+  return (int32_t)(192u + ((group * 13u + block * 17u) & 127u));
+}
+
+static inline uint16_t q1_fixture_bonsai_weight_scale(unsigned int group) {
+  static const uint16_t scales[4] = {
+      UINT16_C(0x3400), UINT16_C(0x3800),
+      UINT16_C(0x3c00), UINT16_C(0x4000)}; // 0.25, 0.5, 1.0, 2.0
+  return scales[group & 3u];
+}
+
+static inline uint32_t q1_fixture_bonsai_sign_word(unsigned int group,
+                                                    unsigned int word) {
+  return UINT32_C(0xa5a5a5a5) ^
+         (UINT32_C(0x9e3779b9) * (group + 1u)) ^
+         (UINT32_C(0x3c6ef372) * (word + 1u));
+}
+
+static inline uint32_t q1_fixture_bonsai_q8_word(unsigned int tile,
+                                                  unsigned int word) {
+  const unsigned int group = tile / BONSAI_Q8_BLOCKS_PER_Q1;
+  const unsigned int block = tile % BONSAI_Q8_BLOCKS_PER_Q1;
+  if (word == 0) {
+    return (uint32_t)q1_fixture_bonsai_q8_scale(group, block);
+  }
+
+  const unsigned int first_lane = (word - 1u) * 4u;
+  uint32_t packed = 0;
+  for (unsigned int byte = 0; byte < 4u; ++byte) {
+    packed |= (uint32_t)(uint8_t)q1_fixture_bonsai_q8_lane(
+                  group, block, first_lane + byte) << (byte * 8u);
+  }
+  return packed;
+}
+
+static inline uint32_t q1_fixture_bonsai_q1_word(unsigned int group,
+                                                  unsigned int word) {
+  return word == 0 ? (uint32_t)q1_fixture_bonsai_weight_scale(group)
+                   : q1_fixture_bonsai_sign_word(group, word - 1u);
+}
+
+static inline int16_t q1_fixture_bonsai_reference_result(unsigned int groups) {
+  int64_t accumulator = 0;
+  for (unsigned int group = 0; group < groups; ++group) {
+    const int32_t weight_scale_q8 =
+        q1_fixture_fp16_to_q8(q1_fixture_bonsai_weight_scale(group));
+    for (unsigned int block = 0; block < BONSAI_Q8_BLOCKS_PER_Q1; ++block) {
+      int32_t integer_sum = 0;
+      const uint32_t signs = q1_fixture_bonsai_sign_word(group, block);
+      for (unsigned int lane = 0; lane < BONSAI_Q8_BLOCK_ELEMENTS; ++lane) {
+        const int32_t value = q1_fixture_bonsai_q8_lane(group, block, lane);
+        integer_sum += ((signs >> lane) & 1u) ? value : -value;
+      }
+      accumulator += ((int64_t)weight_scale_q8 *
+                      q1_fixture_bonsai_q8_scale(group, block) *
+                      integer_sum) >> 16;
+    }
+  }
+
+  if (accumulator > 32767) return 32767;
+  if (accumulator < -32768) return -32768;
+  return (int16_t)accumulator;
 }
 
 #endif

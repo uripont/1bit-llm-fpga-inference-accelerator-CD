@@ -1,4 +1,4 @@
--- One-group Q1_0 x Q8_0 matvec engine for the Proposal A board work unit.
+-- Streaming Q1_0 x Q8_0 row engine, processing one 128-element group at a time.
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -40,6 +40,7 @@ entity q1_matvec_engine is
 end q1_matvec_engine;
 
 architecture rtl of q1_matvec_engine is
+  constant MAX_GROUPS_C : natural := 16384; -- Four 16-bit Q8 tile IDs per group.
   type state_t is (
     IDLE, REQUEST_Q8, CONSUME_Q8, REQUEST_Q1, CONSUME_Q1,
     COMPUTE, REQUEST_OUTPUT, PRODUCE_OUTPUT, ERROR_STATE
@@ -49,6 +50,8 @@ architecture rtl of q1_matvec_engine is
 
   signal state : state_t;
   signal q8_index, compute_block : natural range 0 to Q8_BLOCKS_PER_Q1_C - 1;
+  signal group_index : natural range 0 to MAX_GROUPS_C - 1;
+  signal group_count : natural range 1 to MAX_GROUPS_C;
   signal word_index : natural range 0 to Q8_BLOCK_WORDS_C - 1;
   signal lane_index : natural range 0 to Q8_BLOCK_ELEMENTS_C - 1;
   signal q8_values : q8_value_array_t;
@@ -109,8 +112,11 @@ begin
   transaction_role_o <= ROLE_Q8_INPUT_C when state = REQUEST_Q8 else
                         ROLE_Q1_WEIGHTS_C when state = REQUEST_Q1 else
                         ROLE_OUTPUT_C;
-  transaction_tile_o <= std_ulogic_vector(to_unsigned(q8_index, 16))
-    when state = REQUEST_Q8 else (others => '0');
+  transaction_tile_o <=
+    std_ulogic_vector(to_unsigned(group_index * Q8_BLOCKS_PER_Q1_C + q8_index, 16))
+      when state = REQUEST_Q8 else
+    std_ulogic_vector(to_unsigned(group_index, 16)) when state = REQUEST_Q1 else
+    (others => '0');
   transaction_length_o <= std_ulogic_vector(to_unsigned(Q8_BLOCK_WORDS_C, 16))
     when state = REQUEST_Q8 else
     std_ulogic_vector(to_unsigned(Q1_GROUP_WORDS_C, 16)) when state = REQUEST_Q1 else
@@ -129,7 +135,10 @@ begin
   input_wait_o <= '1' when
     ((state = CONSUME_Q8) or (state = CONSUME_Q1)) and input_valid_i = '0' else '0';
   output_wait_o <= '1' when state = PRODUCE_OUTPUT and output_ready_i = '0' else '0';
-  work_o <= x"00000001" when done_o = '1' else (others => '0');
+  work_o <= x"00000001" when
+    (state = COMPUTE) and
+    (compute_block = Q8_BLOCKS_PER_Q1_C - 1) and
+    (lane_index = Q8_BLOCK_ELEMENTS_C - 1) else (others => '0');
 
   control : process(rstn_i, clk_i)
     variable value_base_v, sign_base_v : natural;
@@ -137,11 +146,14 @@ begin
     variable scale_product_v : signed(63 downto 0);
     variable scaled_wide_v : signed(95 downto 0);
     variable scaled_low_v, contribution_v, next_accumulator_v : signed(63 downto 0);
+    variable requested_groups_v : natural range 0 to 65535;
   begin
     if rstn_i = '0' then
       state             <= IDLE;
       q8_index          <= 0;
       compute_block     <= 0;
+      group_index       <= 0;
+      group_count       <= 1;
       word_index        <= 0;
       lane_index        <= 0;
       q1_signs          <= (others => '0');
@@ -155,13 +167,18 @@ begin
           if launch_i = '1' then
             q8_index        <= 0;
             compute_block   <= 0;
+            group_index     <= 0;
             word_index      <= 0;
             lane_index      <= 0;
             q1_signs        <= (others => '0');
             integer_partial <= (others => '0');
             row_accumulator <= (others => '0');
             output_result   <= (others => '0');
-            if (unsigned(rows_i) = 1) and (unsigned(groups_i) = 1) then
+            requested_groups_v := to_integer(unsigned(groups_i));
+            if (unsigned(rows_i) = 1) and
+               (requested_groups_v > 0) and
+               (requested_groups_v <= MAX_GROUPS_C) then
+              group_count <= requested_groups_v;
               state <= REQUEST_Q8;
             else
               state <= ERROR_STATE;
@@ -216,7 +233,6 @@ begin
               compute_block   <= 0;
               lane_index      <= 0;
               integer_partial <= (others => '0');
-              row_accumulator <= (others => '0');
               state <= COMPUTE;
             else
               word_index <= word_index + 1;
@@ -242,8 +258,14 @@ begin
             lane_index <= 0;
             row_accumulator <= next_accumulator_v;
             if compute_block = Q8_BLOCKS_PER_Q1_C - 1 then
-              output_result <= saturate_i16(next_accumulator_v);
-              state <= REQUEST_OUTPUT;
+              if group_index = group_count - 1 then
+                output_result <= saturate_i16(next_accumulator_v);
+                state <= REQUEST_OUTPUT;
+              else
+                group_index <= group_index + 1;
+                q8_index <= 0;
+                state <= REQUEST_Q8;
+              end if;
             else
               compute_block <= compute_block + 1;
             end if;
