@@ -46,11 +46,20 @@ architecture bonsai_accel_rtl of neorv32_cfs is
   signal engine_output_valid, engine_output_ready : std_ulogic;
   signal engine_input_data, engine_output_data : std_ulogic_vector(31 downto 0);
 
+  signal stream_transaction_valid, stream_transaction_ready : std_ulogic;
+  signal stream_transaction_direction : std_ulogic;
+  signal stream_transaction_role : tile_role_t;
+  signal stream_transaction_tile, stream_transaction_length : std_ulogic_vector(15 downto 0);
+  signal stream_input_valid, stream_input_ready : std_ulogic;
+  signal stream_output_valid, stream_output_ready : std_ulogic;
+  signal stream_input_data, stream_output_data : std_ulogic_vector(31 downto 0);
+
   signal engine_launch, engine_busy, engine_done, engine_error : std_ulogic;
   signal engine_active, engine_input_wait, engine_output_wait : std_ulogic;
   signal engine_work : std_ulogic_vector(31 downto 0);
   signal command_counter_start, command_active, engine_interval, engine_control : std_ulogic;
   signal frontend_idle, frontend_error, frontend_input_wait, frontend_output_wait : std_ulogic;
+  signal stream_idle, stream_error : std_ulogic;
   signal frontend_input_bytes, frontend_output_bytes : std_ulogic_vector(31 downto 0);
 
   signal counter_command, counter_engine, counter_active : std_ulogic_vector(31 downto 0);
@@ -136,7 +145,45 @@ begin
       engine_interval_o => engine_interval
     );
 
-  frontend_inst : entity neorv32.stream_frontend
+  frontend_control_inst : entity neorv32.frontend_control
+    generic map (
+      TILE_WORD_CAPACITY => 4
+    )
+    port map (
+      clk_i => clk_i,
+      rstn_i => rstn_i,
+      command_start_i => command_counter_start,
+      engine_transaction_valid_i => transaction_valid,
+      engine_transaction_ready_o => transaction_ready,
+      engine_transaction_direction_i => transaction_direction,
+      engine_transaction_role_i => transaction_role,
+      engine_transaction_tile_i => transaction_tile,
+      engine_transaction_length_i => transaction_length,
+      engine_input_valid_o => engine_input_valid,
+      engine_input_ready_i => engine_input_ready,
+      engine_input_data_o => engine_input_data,
+      engine_output_valid_i => engine_output_valid,
+      engine_output_ready_o => engine_output_ready,
+      engine_output_data_i => engine_output_data,
+      stream_transaction_valid_o => stream_transaction_valid,
+      stream_transaction_ready_i => stream_transaction_ready,
+      stream_transaction_direction_o => stream_transaction_direction,
+      stream_transaction_role_o => stream_transaction_role,
+      stream_transaction_tile_o => stream_transaction_tile,
+      stream_transaction_length_o => stream_transaction_length,
+      stream_input_valid_i => stream_input_valid,
+      stream_input_ready_o => stream_input_ready,
+      stream_input_data_i => stream_input_data,
+      stream_output_valid_o => stream_output_valid,
+      stream_output_ready_i => stream_output_ready,
+      stream_output_data_o => stream_output_data,
+      stream_idle_i => stream_idle,
+      stream_error_i => stream_error,
+      idle_o => frontend_idle,
+      error_o => frontend_error
+    );
+
+  stream_frontend_inst : entity neorv32.stream_frontend
     generic map (
       FIFO_DEPTH => 2
     )
@@ -144,18 +191,18 @@ begin
       clk_i => clk_i,
       rstn_i => rstn_i,
       command_start_i => command_counter_start,
-      transaction_valid_i => transaction_valid,
-      transaction_ready_o => transaction_ready,
-      transaction_direction_i => transaction_direction,
-      transaction_role_i => transaction_role,
-      transaction_tile_i => transaction_tile,
-      transaction_length_i => transaction_length,
-      engine_input_valid_o => engine_input_valid,
-      engine_input_ready_i => engine_input_ready,
-      engine_input_data_o => engine_input_data,
-      engine_output_valid_i => engine_output_valid,
-      engine_output_ready_o => engine_output_ready,
-      engine_output_data_i => engine_output_data,
+      transaction_valid_i => stream_transaction_valid,
+      transaction_ready_o => stream_transaction_ready,
+      transaction_direction_i => stream_transaction_direction,
+      transaction_role_i => stream_transaction_role,
+      transaction_tile_i => stream_transaction_tile,
+      transaction_length_i => stream_transaction_length,
+      engine_input_valid_o => stream_input_valid,
+      engine_input_ready_i => stream_input_ready,
+      engine_input_data_o => stream_input_data,
+      engine_output_valid_i => stream_output_valid,
+      engine_output_ready_o => stream_output_ready,
+      engine_output_data_i => stream_output_data,
       cpu_input_write_i => fifo_input_write,
       cpu_input_data_i => fifo_input_data,
       cpu_input_ready_o => fifo_input_ready,
@@ -176,8 +223,8 @@ begin
       output_wait_o => frontend_output_wait,
       input_bytes_o => frontend_input_bytes,
       output_bytes_o => frontend_output_bytes,
-      idle_o => frontend_idle,
-      error_o => frontend_error
+      idle_o => stream_idle,
+      error_o => stream_error
     );
 
   test_engine_inst : entity neorv32.shell_test_engine

@@ -8,10 +8,11 @@ The current implementation establishes the CFS identity, interface version,
 shared register map, service and transfer identifiers, semantic tile roles,
 command lifecycle, and per-command counters. A temporary streaming engine
 requests a four-word input transaction and produces a four-word output
-transaction. The `CPU_PUSH`
-frontend provides independent ingress and egress FIFOs, request metadata,
+transaction. The `CPU_PUSH` frontend provides independent ingress and egress
+FIFOs, request metadata,
 backpressure, physical-byte counters, and frontend wait counters. Local tile
-buffers and the two compute engines are added in subsequent stages;
+buffers now stage complete role-tagged input and output transactions between
+the FIFOs and engine. The two compute engines are added in subsequent stages;
 `MEM_STREAM` currently terminates with an unsupported-mode error.
 
 ## Validate the CFS integration
@@ -27,4 +28,6 @@ The command builds the probe firmware, compiles the complete NEORV32 testbench
 with the project CFS implementation, and checks for `shell_probe=PASS` in the
 simulated UART output. The probe runs both service selections, validates the
 counter identity and FIFO payloads, acknowledges repeated commands, and checks
-the current `MEM_STREAM` error behavior.
+the current `MEM_STREAM` error behavior. The two-word FIFOs exercise CPU-side
+backpressure, while the four-word local output tile keeps the engine independent
+of CPU drain timing for the test transaction.

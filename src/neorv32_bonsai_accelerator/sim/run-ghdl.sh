@@ -30,6 +30,8 @@ done < <(find "${NEORV32_ROOT}/rtl/core" -type f -name '*.vhd' \
   "${RTL_DIR}/cfs_reg_file.vhd" \
   "${RTL_DIR}/accel_top.vhd" \
   "${RTL_DIR}/counter_block.vhd" \
+  "${RTL_DIR}/local_buffer_bank.vhd" \
+  "${RTL_DIR}/frontend_control.vhd" \
   "${RTL_DIR}/stream_frontend.vhd" \
   "${RTL_DIR}/shell_test_engine.vhd" \
   "${RTL_DIR}/neorv32_cfs.vhd" \

@@ -110,7 +110,7 @@ static int run_cpu_push_command(enum bonsai_accel_service service,
       (metrics->engine_cycles == classified_engine_cycles) &&
       (metrics->active_cycles == TEST_WORDS * 2u) &&
       (metrics->input_wait_cycles != 0) &&
-      (metrics->output_wait_cycles != 0) &&
+      (metrics->output_wait_cycles == 0) &&
       (metrics->frontend_input_wait != 0) &&
       (metrics->frontend_output_wait != 0) &&
       (metrics->input_bytes == TEST_WORDS * sizeof(uint32_t)) &&
