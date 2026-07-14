@@ -5,11 +5,9 @@ from __future__ import annotations
 
 import argparse
 import csv
-import importlib.util
 import selectors
 import shutil
 import subprocess
-import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,17 +15,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src" / "tier3_neorv32_cycle_kernels"
-GENERATED = SRC / "generated"
+BONSAI_FIXTURE = SRC / "generated" / "tier3_bonsai_fixture.h"
 RESULTS_BASE = ROOT / "results" / "tier3_neorv32_cycle_kernels" / "q1_matvec"
 RESULTS = RESULTS_BASE / "board"
-DEFAULT_MODEL = ROOT / "models" / "bonsai-1.7b-gguf" / "Bonsai-1.7B-Q1_0.gguf"
-SIBLING_MODEL = (
-    ROOT.parent
-    / "1bit-llm-inference-accelerator"
-    / "models"
-    / "bonsai-1.7b-gguf"
-    / "Bonsai-1.7B-Q1_0.gguf"
-)
 DEVCONTAINER_NAME = "1bit-llm-fpga-dev"
 DEVCONTAINER_ROOT = Path("/workspaces/1bit-llm-fpga-inference-accelerator-CD")
 DEVCONTAINER_SRC = DEVCONTAINER_ROOT / "src" / "tier3_neorv32_cycle_kernels"
@@ -190,43 +180,6 @@ def ratio(numerator: str, denominator: str) -> str:
   if den == 0:
     return ""
   return f"{int(numerator) / den:.6f}"
-
-
-def load_fixture_exporter():
-  helper = SRC / "run-benchmark.py"
-  spec = importlib.util.spec_from_file_location("tier3_benchmark_helper", helper)
-  if spec is None or spec.loader is None:
-    raise RuntimeError(f"cannot load fixture exporter: {helper}")
-  module = importlib.util.module_from_spec(spec)
-  sys.modules[spec.name] = module
-  spec.loader.exec_module(module)
-  return module.export_fixture
-
-
-def choose_model(model_arg: Path | None) -> Path | None:
-  candidates = [model_arg] if model_arg else [DEFAULT_MODEL, SIBLING_MODEL]
-  for candidate in candidates:
-    if candidate and candidate.exists():
-      return candidate
-  return None
-
-
-def ensure_fixture(model_arg: Path | None, refresh: bool) -> str:
-  fixture = GENERATED / "tier3_bonsai_fixture.h"
-  if fixture.exists() and not refresh:
-    return str(fixture.relative_to(ROOT))
-
-  model = choose_model(model_arg)
-  if model is None:
-    raise RuntimeError(
-        "missing GGUF model and no generated fixture is available; "
-        f"looked for {DEFAULT_MODEL} and {SIBLING_MODEL}"
-    )
-
-  GENERATED.mkdir(parents=True, exist_ok=True)
-  export_fixture = load_fixture_exporter()
-  export_fixture(model, fixture)
-  return str(fixture.relative_to(ROOT))
 
 
 def selected_variants(text: str) -> list[Variant]:
@@ -523,8 +476,6 @@ def main() -> int:
   parser = argparse.ArgumentParser(description="Run Tier 3 Q1 matvec NEORV32 simulation baselines.")
   parser.add_argument("--profile", choices=sorted(PROFILES), default="board")
   parser.add_argument("--variants", default=None, help="Comma-separated variants or 'all'. Defaults depend on --profile.")
-  parser.add_argument("--model", type=Path, default=None)
-  parser.add_argument("--refresh-fixture", action="store_true")
   parser.add_argument("--runner", choices=["auto", "direct", "devcontainer", "docker", "docker_host_ghdl"], default="auto")
   parser.add_argument("--devcontainer-name", default=DEVCONTAINER_NAME)
   parser.add_argument("--docker-image", default="1bit-llm-fpga-dev:latest")
@@ -545,7 +496,9 @@ def main() -> int:
   imem_size = args.imem_size or profile.imem_size
   ram_size = args.ram_size or profile.ram_size
   rom_size = args.rom_size or profile.rom_size
-  fixture = ensure_fixture(args.model, args.refresh_fixture) if profile.use_fixture else "synthetic"
+  if profile.use_fixture and not BONSAI_FIXTURE.is_file():
+    raise RuntimeError(f"missing committed Bonsai fixture: {BONSAI_FIXTURE}")
+  fixture = str(BONSAI_FIXTURE.relative_to(ROOT)) if profile.use_fixture else "synthetic"
   runner = detect_runner(args.runner, args.devcontainer_name)
   variants = selected_variants(args.variants or profile.default_variants)
 
