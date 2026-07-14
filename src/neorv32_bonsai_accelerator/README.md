@@ -6,10 +6,13 @@ The upstream NEORV32 submodule remains unchanged.
 
 The current implementation establishes the CFS identity, interface version,
 shared register map, service and transfer identifiers, semantic tile roles,
-command lifecycle, and per-command counters. A temporary fixed-latency engine
-exercises launch and completion for both service selections. `CPU_PUSH` payload
-movement, local buffers, and the two compute engines are added in subsequent
-stages; `MEM_STREAM` currently terminates with an unsupported-mode error.
+command lifecycle, and per-command counters. A temporary streaming engine
+requests a four-word input transaction and produces a four-word output
+transaction. The `CPU_PUSH`
+frontend provides independent ingress and egress FIFOs, request metadata,
+backpressure, physical-byte counters, and frontend wait counters. Local tile
+buffers and the two compute engines are added in subsequent stages;
+`MEM_STREAM` currently terminates with an unsupported-mode error.
 
 ## Validate the CFS integration
 
@@ -23,5 +26,5 @@ make clean_all shell-sim
 The command builds the probe firmware, compiles the complete NEORV32 testbench
 with the project CFS implementation, and checks for `shell_probe=PASS` in the
 simulated UART output. The probe runs both service selections, validates the
-counter identity, acknowledges repeated commands, and checks the current
-`MEM_STREAM` error behavior.
+counter identity and FIFO payloads, acknowledges repeated commands, and checks
+the current `MEM_STREAM` error behavior.

@@ -52,6 +52,22 @@ package bonsai_accel_pkg is
   constant STATUS_ERROR_CODE_LSB_C    : natural := 16;
   constant STATUS_ERROR_CODE_MSB_C    : natural := 19;
 
+  -- CPU_PUSH request register. Ingress and egress may be active together.
+  constant REQUEST_INPUT_VALID_BIT_C  : natural := 0;
+  constant REQUEST_OUTPUT_VALID_BIT_C : natural := 1;
+  constant REQUEST_INPUT_ROLE_LSB_C   : natural := 4;
+  constant REQUEST_INPUT_ROLE_MSB_C   : natural := 7;
+  constant REQUEST_OUTPUT_ROLE_LSB_C  : natural := 8;
+  constant REQUEST_OUTPUT_ROLE_MSB_C  : natural := 11;
+
+  -- CPU_PUSH FIFO status register.
+  constant FIFO_INPUT_READY_BIT_C     : natural := 0;
+  constant FIFO_OUTPUT_VALID_BIT_C    : natural := 1;
+  constant FIFO_INPUT_LEVEL_LSB_C     : natural := 8;
+  constant FIFO_INPUT_LEVEL_MSB_C     : natural := 15;
+  constant FIFO_OUTPUT_LEVEL_LSB_C    : natural := 16;
+  constant FIFO_OUTPUT_LEVEL_MSB_C    : natural := 23;
+
   -- Configuration register fields.
   subtype service_t is std_ulogic_vector(1 downto 0);
   constant SERVICE_NONE_C      : service_t := "00";
@@ -64,6 +80,9 @@ package bonsai_accel_pkg is
   constant TRANSFER_CPU_PUSH_C  : transfer_mode_t := '0';
   constant TRANSFER_MEM_STREAM_C : transfer_mode_t := '1';
   constant CONFIG_TRANSFER_BIT_C : natural := 8;
+
+  constant TILE_DIRECTION_INPUT_C  : std_ulogic := '0';
+  constant TILE_DIRECTION_OUTPUT_C : std_ulogic := '1';
 
   -- Semantic tile roles shared by the software descriptors and both engines.
   subtype tile_role_t is std_ulogic_vector(3 downto 0);

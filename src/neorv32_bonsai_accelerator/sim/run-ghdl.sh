@@ -30,6 +30,7 @@ done < <(find "${NEORV32_ROOT}/rtl/core" -type f -name '*.vhd' \
   "${RTL_DIR}/cfs_reg_file.vhd" \
   "${RTL_DIR}/accel_top.vhd" \
   "${RTL_DIR}/counter_block.vhd" \
+  "${RTL_DIR}/stream_frontend.vhd" \
   "${RTL_DIR}/shell_test_engine.vhd" \
   "${RTL_DIR}/neorv32_cfs.vhd" \
   "${APP_IMAGE}"
@@ -54,7 +55,7 @@ SIM_LOG="${BUILD_DIR}/shell-probe.log"
   --max-stack-alloc=0 \
   --ieee-asserts=disable \
   --assert-level=error \
-  --stop-time=1ms | tee "${SIM_LOG}"
+  --stop-time=2ms | tee "${SIM_LOG}"
 
 grep -q '^shell_probe=PASS$' "${SIM_LOG}"
 echo "[pass] Bonsai accelerator CFS register contract"

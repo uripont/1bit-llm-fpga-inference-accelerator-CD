@@ -20,6 +20,8 @@ entity accel_top is
     engine_done_i  : in std_ulogic;
     engine_error_i : in std_ulogic;
     engine_launch_o : out std_ulogic;
+    frontend_idle_i  : in std_ulogic;
+    frontend_error_i : in std_ulogic;
 
     busy_o              : out std_ulogic;
     done_o              : out std_ulogic;
@@ -96,7 +98,10 @@ begin
           end if;
 
         when RUN =>
-          if engine_error_i = '1' then
+          if frontend_error_i = '1' then
+            error_code <= ERROR_FRONTEND_C;
+            state      <= ERROR;
+          elsif engine_error_i = '1' then
             error_code <= ERROR_ENGINE_C;
             state      <= ERROR;
           elsif engine_done_i = '1' then
@@ -104,7 +109,12 @@ begin
           end if;
 
         when DRAIN =>
-          state <= DONE;
+          if frontend_error_i = '1' then
+            error_code <= ERROR_FRONTEND_C;
+            state      <= ERROR;
+          elsif frontend_idle_i = '1' then
+            state <= DONE;
+          end if;
 
         when DONE =>
           if acknowledge_i = '1' then
