@@ -44,8 +44,11 @@ static int metrics_are_classified(const struct command_metrics *metrics) {
              metrics->output_wait_cycles + metrics->control_cycles;
 }
 
-static int run_q1_contract(struct command_metrics *metrics,
-                           uint32_t *output_word) {
+static int run_q1_arithmetic(uint16_t weight_scale_fp16,
+                             int32_t q8_scale_q16,
+                             uint32_t sign_word,
+                             struct command_metrics *metrics,
+                             uint32_t *output_word) {
   unsigned int q8_words[BONSAI_Q8_BLOCKS_PER_Q1] = {0};
   unsigned int q1_words = 0;
   unsigned int output_words = 0;
@@ -86,11 +89,11 @@ static int run_q1_contract(struct command_metrics *metrics,
           tile < BONSAI_Q8_BLOCKS_PER_Q1 && words_left > 0 &&
           words_left <= BONSAI_Q8_BLOCK_WORDS &&
           q8_words[tile] == BONSAI_Q8_BLOCK_WORDS - words_left) {
-        word = q1_fixture_q8_word(tile, q8_words[tile]++);
+        word = q1_fixture_q8_word(tile, q8_words[tile]++, q8_scale_q16);
       } else if (role == BONSAI_ROLE_Q1_WEIGHTS && tile == 0 &&
                  words_left > 0 && words_left <= BONSAI_Q1_GROUP_WORDS &&
                  q1_words == BONSAI_Q1_GROUP_WORDS - words_left) {
-        word = q1_fixture_q1_word(q1_words++);
+        word = q1_fixture_q1_word(q1_words++, weight_scale_fp16, sign_word);
       } else {
         return 0;
       }
@@ -125,14 +128,16 @@ static int run_q1_contract(struct command_metrics *metrics,
       metrics_are_classified(metrics) &&
       metrics->active_cycles ==
           BONSAI_Q8_BLOCKS_PER_Q1 * BONSAI_Q8_BLOCK_WORDS +
-              BONSAI_Q1_GROUP_WORDS + BONSAI_MATVEC_OUTPUT_WORDS &&
+          BONSAI_Q1_GROUP_WORDS + BONSAI_Q1_GROUP_ELEMENTS +
+              BONSAI_MATVEC_OUTPUT_WORDS &&
       metrics->input_wait_cycles != 0 && metrics->output_wait_cycles == 0 &&
       metrics->frontend_input_wait != 0 && metrics->frontend_output_wait != 0 &&
       metrics->input_bytes ==
           (BONSAI_Q8_BLOCKS_PER_Q1 * BONSAI_Q8_BLOCK_WORDS +
            BONSAI_Q1_GROUP_WORDS) * sizeof(uint32_t) &&
-      metrics->output_bytes == sizeof(uint32_t) && metrics->work == 0 &&
-      *output_word == (uint32_t)(int32_t)q1_fixture_reference_result();
+      metrics->output_bytes == sizeof(uint32_t) && metrics->work == 1 &&
+      *output_word == (uint32_t)(int32_t)q1_fixture_reference_result(
+          weight_scale_fp16, q8_scale_q16, sign_word);
 
   bonsai_accel_write(BONSAI_REG_COMMAND, BONSAI_COMMAND_ACK);
   return valid && bonsai_accel_read(BONSAI_REG_STATUS) == 0;
@@ -215,9 +220,15 @@ static void print_metrics(const char *prefix,
 }
 
 int main(void) {
-  struct command_metrics q1_metrics = {0};
+  struct command_metrics q1_base_metrics = {0};
+  struct command_metrics q1_weight_metrics = {0};
+  struct command_metrics q1_q8_metrics = {0};
+  struct command_metrics q1_saturation_metrics = {0};
   struct command_metrics attention_metrics = {0};
-  uint32_t q1_output_word = 0;
+  uint32_t q1_base_output = 0;
+  uint32_t q1_weight_output = 0;
+  uint32_t q1_q8_output = 0;
+  uint32_t q1_saturation_output = 0;
 
   neorv32_uart0_setup(19200, 0);
   neorv32_uart0_printf("bonsai_shell_probe\n");
@@ -229,9 +240,34 @@ int main(void) {
     return 1;
   }
 
-  const int16_t reference_result = q1_fixture_reference_result();
-  if (reference_result != 64 ||
-      !run_q1_contract(&q1_metrics, &q1_output_word) ||
+  const int16_t base_reference = q1_fixture_reference_result(
+      Q1_FIXTURE_WEIGHT_SCALE_FP16, Q1_FIXTURE_Q8_SCALE_Q16,
+      Q1_FIXTURE_SIGN_WORD);
+  const int16_t weight_reference = q1_fixture_reference_result(
+      Q1_FIXTURE_HALF_WEIGHT_SCALE_FP16, Q1_FIXTURE_Q8_SCALE_Q16,
+      Q1_FIXTURE_INVERTED_SIGN_WORD);
+  const int16_t q8_reference = q1_fixture_reference_result(
+      Q1_FIXTURE_WEIGHT_SCALE_FP16, Q1_FIXTURE_DOUBLE_Q8_SCALE_Q16,
+      Q1_FIXTURE_SIGN_WORD);
+  const int16_t saturation_reference = q1_fixture_reference_result(
+      Q1_FIXTURE_WEIGHT_SCALE_FP16, Q1_FIXTURE_SATURATING_Q8_SCALE_Q16,
+      Q1_FIXTURE_SIGN_WORD);
+  if (base_reference != 64 || weight_reference != -32 || q8_reference != 128 ||
+      saturation_reference != 32767 ||
+      !run_q1_arithmetic(
+          Q1_FIXTURE_WEIGHT_SCALE_FP16, Q1_FIXTURE_Q8_SCALE_Q16,
+          Q1_FIXTURE_SIGN_WORD, &q1_base_metrics, &q1_base_output) ||
+      !run_q1_arithmetic(
+          Q1_FIXTURE_HALF_WEIGHT_SCALE_FP16, Q1_FIXTURE_Q8_SCALE_Q16,
+          Q1_FIXTURE_INVERTED_SIGN_WORD, &q1_weight_metrics,
+          &q1_weight_output) ||
+      !run_q1_arithmetic(
+          Q1_FIXTURE_WEIGHT_SCALE_FP16, Q1_FIXTURE_DOUBLE_Q8_SCALE_Q16,
+          Q1_FIXTURE_SIGN_WORD, &q1_q8_metrics, &q1_q8_output) ||
+      !run_q1_arithmetic(
+          Q1_FIXTURE_WEIGHT_SCALE_FP16, Q1_FIXTURE_SATURATING_Q8_SCALE_Q16,
+          Q1_FIXTURE_SIGN_WORD, &q1_saturation_metrics,
+          &q1_saturation_output) ||
       !run_attention_probe(&attention_metrics)) {
     neorv32_uart0_printf("shell_probe=FAIL reason=cpu_push\n");
     return 1;
@@ -255,10 +291,22 @@ int main(void) {
   neorv32_uart0_printf("accelerator_id=0x%x\n", BONSAI_ACCEL_ID);
   neorv32_uart0_printf("interface_version=0x%x\n", BONSAI_ACCEL_VERSION);
   neorv32_uart0_printf(
-      "q1_fixture rows=1 groups=1 elements=128 reference=%i output=%i checksum=0x%x\n",
-      (int32_t)reference_result, (int32_t)q1_output_word,
-      q1_fixture_transport_checksum());
-  print_metrics("q1_contract", &q1_metrics);
+      "q1_base reference=%i output=%i checksum=0x%x\n",
+      (int32_t)base_reference, (int32_t)q1_base_output,
+      q1_fixture_transport_checksum(
+          Q1_FIXTURE_WEIGHT_SCALE_FP16, Q1_FIXTURE_Q8_SCALE_Q16,
+          Q1_FIXTURE_SIGN_WORD));
+  neorv32_uart0_printf("q1_half_weight reference=%i output=%i\n",
+                      (int32_t)weight_reference, (int32_t)q1_weight_output);
+  neorv32_uart0_printf("q1_double_q8 reference=%i output=%i\n",
+                      (int32_t)q8_reference, (int32_t)q1_q8_output);
+  neorv32_uart0_printf("q1_saturation reference=%i output=%i\n",
+                      (int32_t)saturation_reference,
+                      (int32_t)q1_saturation_output);
+  print_metrics("q1_base", &q1_base_metrics);
+  print_metrics("q1_half_weight", &q1_weight_metrics);
+  print_metrics("q1_double_q8", &q1_q8_metrics);
+  print_metrics("q1_saturation", &q1_saturation_metrics);
   print_metrics("attention_probe", &attention_metrics);
   neorv32_uart0_printf("unsupported_mode_error=%u\n", (uint32_t)unsupported_error);
   neorv32_uart0_printf("shell_probe=PASS\n");

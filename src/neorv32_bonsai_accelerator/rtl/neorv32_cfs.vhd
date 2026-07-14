@@ -286,7 +286,7 @@ begin
       error_o => stream_error
     );
 
-  q1_contract_engine_inst : entity neorv32.q1_matvec_contract_engine
+  q1_matvec_engine_inst : entity neorv32.q1_matvec_engine
     port map (
       clk_i => clk_i,
       rstn_i => rstn_i,

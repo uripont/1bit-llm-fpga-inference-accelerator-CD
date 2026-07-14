@@ -9,9 +9,9 @@ shared register map, service and transfer identifiers, semantic tile roles,
 command lifecycle, and per-command counters. Proposal A now has a board-sized
 transport contract for one 128-element Q1_0 by Q8_0 work unit. It transfers
 four Q8 blocks, one packed Q1 group, and one row result through role-tagged
-tiles; the fixture-specific contract engine checks transport integrity and
-output encoding while the matvec datapath is developed. The `CPU_PUSH`
-frontend provides independent
+tiles. The board-work-unit engine unpacks the records, performs one signed lane
+per cycle, applies both fixed-point scales, accumulates the row, and emits a
+saturated signed 16-bit result. The `CPU_PUSH` frontend provides independent
 ingress and egress FIFOs, request metadata,
 backpressure, physical-byte counters, and frontend wait counters. Local tile
 buffers now stage complete role-tagged input and output transactions between

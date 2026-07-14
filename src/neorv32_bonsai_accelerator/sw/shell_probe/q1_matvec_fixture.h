@@ -9,8 +9,12 @@
 #define Q1_FIXTURE_ROWS 1u
 #define Q1_FIXTURE_GROUPS 1u
 #define Q1_FIXTURE_WEIGHT_SCALE_FP16 UINT16_C(0x3c00) // 1.0
+#define Q1_FIXTURE_HALF_WEIGHT_SCALE_FP16 UINT16_C(0x3800) // 0.5
 #define Q1_FIXTURE_Q8_SCALE_Q16 INT32_C(256)
+#define Q1_FIXTURE_DOUBLE_Q8_SCALE_Q16 INT32_C(512)
+#define Q1_FIXTURE_SATURATING_Q8_SCALE_Q16 INT32_C(262144)
 #define Q1_FIXTURE_SIGN_WORD UINT32_C(0xaaaaaaaa)
+#define Q1_FIXTURE_INVERTED_SIGN_WORD UINT32_C(0x55555555)
 
 static inline int8_t q1_fixture_q8_lane(unsigned int block,
                                         unsigned int lane) {
@@ -18,9 +22,10 @@ static inline int8_t q1_fixture_q8_lane(unsigned int block,
 }
 
 static inline uint32_t q1_fixture_q8_word(unsigned int block,
-                                          unsigned int word) {
+                                          unsigned int word,
+                                          int32_t scale_q16) {
   if (word == 0) {
-    return (uint32_t)Q1_FIXTURE_Q8_SCALE_Q16;
+    return (uint32_t)scale_q16;
   }
 
   const unsigned int first_lane = (word - 1u) * 4u;
@@ -32,9 +37,10 @@ static inline uint32_t q1_fixture_q8_word(unsigned int block,
   return packed;
 }
 
-static inline uint32_t q1_fixture_q1_word(unsigned int word) {
-  return word == 0 ? (uint32_t)Q1_FIXTURE_WEIGHT_SCALE_FP16
-                   : Q1_FIXTURE_SIGN_WORD;
+static inline uint32_t q1_fixture_q1_word(unsigned int word,
+                                          uint16_t weight_scale_fp16,
+                                          uint32_t sign_word) {
+  return word == 0 ? (uint32_t)weight_scale_fp16 : sign_word;
 }
 
 static inline int32_t q1_fixture_fp16_to_q8(uint16_t h) {
@@ -57,21 +63,23 @@ static inline int32_t q1_fixture_fp16_to_q8(uint16_t h) {
   return sign * value_q8;
 }
 
-static inline int16_t q1_fixture_reference_result(void) {
+static inline int16_t q1_fixture_reference_result(uint16_t weight_scale_fp16,
+                                                   int32_t q8_scale_q16,
+                                                   uint32_t sign_word) {
   int64_t accumulator = 0;
   const int32_t weight_scale_q8 =
-      q1_fixture_fp16_to_q8(Q1_FIXTURE_WEIGHT_SCALE_FP16);
+      q1_fixture_fp16_to_q8(weight_scale_fp16);
 
   for (unsigned int block = 0; block < BONSAI_Q8_BLOCKS_PER_Q1; ++block) {
     int32_t integer_sum = 0;
     for (unsigned int lane = 0; lane < BONSAI_Q8_BLOCK_ELEMENTS; ++lane) {
       const unsigned int element = block * BONSAI_Q8_BLOCK_ELEMENTS + lane;
       const int32_t value = q1_fixture_q8_lane(block, lane);
-      integer_sum += ((Q1_FIXTURE_SIGN_WORD >> (element & 31u)) & 1u)
+      integer_sum += ((sign_word >> (element & 31u)) & 1u)
                          ? value
                          : -value;
     }
-    accumulator += ((int64_t)weight_scale_q8 * Q1_FIXTURE_Q8_SCALE_Q16 *
+    accumulator += ((int64_t)weight_scale_q8 * q8_scale_q16 *
                     integer_sum) >> 16;
   }
 
@@ -85,16 +93,19 @@ static inline uint32_t q1_fixture_rotate_xor(uint32_t checksum,
   return ((checksum << 1) | (checksum >> 31)) ^ word;
 }
 
-static inline uint32_t q1_fixture_transport_checksum(void) {
+static inline uint32_t q1_fixture_transport_checksum(uint16_t weight_scale_fp16,
+                                                      int32_t q8_scale_q16,
+                                                      uint32_t sign_word) {
   uint32_t checksum = 0;
   for (unsigned int block = 0; block < BONSAI_Q8_BLOCKS_PER_Q1; ++block) {
     for (unsigned int word = 0; word < BONSAI_Q8_BLOCK_WORDS; ++word) {
       checksum = q1_fixture_rotate_xor(checksum,
-                                       q1_fixture_q8_word(block, word));
+          q1_fixture_q8_word(block, word, q8_scale_q16));
     }
   }
   for (unsigned int word = 0; word < BONSAI_Q1_GROUP_WORDS; ++word) {
-    checksum = q1_fixture_rotate_xor(checksum, q1_fixture_q1_word(word));
+    checksum = q1_fixture_rotate_xor(
+        checksum, q1_fixture_q1_word(word, weight_scale_fp16, sign_word));
   }
   return checksum;
 }
