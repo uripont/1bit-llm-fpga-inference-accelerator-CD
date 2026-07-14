@@ -14,6 +14,9 @@ RTL_DIR="${ACCEL_ROOT}/rtl"
 BUILD_DIR="${SCRIPT_DIR}/build"
 APP_IMAGE="$(realpath "$1")"
 GHDL="${GHDL:-ghdl}"
+IMEM_SIZE="${IMEM_SIZE:-16384}"
+DMEM_SIZE="${DMEM_SIZE:-8192}"
+STOP_TIME="${STOP_TIME:-15ms}"
 
 rm -rf "${BUILD_DIR}"
 mkdir -p "${BUILD_DIR}"
@@ -53,12 +56,12 @@ SIM_LOG="${BUILD_DIR}/shell-probe.log"
 "${GHDL}" -r --std=08 --work=neorv32 --workdir="${BUILD_DIR}" neorv32_tb \
   -gJTAG_TESTS_EN=false \
   -gDUAL_CORE_EN=false \
-  -gIMEM_SIZE=16384 \
-  -gDMEM_SIZE=8192 \
+  -gIMEM_SIZE="${IMEM_SIZE}" \
+  -gDMEM_SIZE="${DMEM_SIZE}" \
   --max-stack-alloc=0 \
   --ieee-asserts=disable \
   --assert-level=error \
-  --stop-time=15ms | tee "${SIM_LOG}"
+  --stop-time="${STOP_TIME}" | tee "${SIM_LOG}"
 
 grep -q '^shell_probe=PASS$' "${SIM_LOG}"
 echo "[pass] Bonsai accelerator CFS register contract"

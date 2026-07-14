@@ -12,6 +12,7 @@
 #define Q1_FIXTURE_MULTI_ROWS 3u
 #define Q1_FIXTURE_MULTI_GROUPS 2u
 #define Q1_FIXTURE_WEIGHT_SCALE_FP16 UINT16_C(0x3c00) // 1.0
+#define Q1_FIXTURE_WEIGHT_SCALE_FIXED_Q8 UINT16_C(256)
 #define Q1_FIXTURE_HALF_WEIGHT_SCALE_FP16 UINT16_C(0x3800) // 0.5
 #define Q1_FIXTURE_Q8_SCALE_Q16 INT32_C(256)
 #define Q1_FIXTURE_DOUBLE_Q8_SCALE_Q16 INT32_C(512)
@@ -66,12 +67,11 @@ static inline int32_t q1_fixture_fp16_to_q8(uint16_t h) {
   return sign * value_q8;
 }
 
-static inline int16_t q1_fixture_reference_result(uint16_t weight_scale_fp16,
-                                                   int32_t q8_scale_q16,
-                                                   uint32_t sign_word) {
+static inline int16_t q1_fixture_reference_result_from_q8(
+    int32_t weight_scale_q8,
+    int32_t q8_scale_q16,
+    uint32_t sign_word) {
   int64_t accumulator = 0;
-  const int32_t weight_scale_q8 =
-      q1_fixture_fp16_to_q8(weight_scale_fp16);
 
   for (unsigned int block = 0; block < BONSAI_Q8_BLOCKS_PER_Q1; ++block) {
     int32_t integer_sum = 0;
@@ -89,6 +89,13 @@ static inline int16_t q1_fixture_reference_result(uint16_t weight_scale_fp16,
   if (accumulator > 32767) return 32767;
   if (accumulator < -32768) return -32768;
   return (int16_t)accumulator;
+}
+
+static inline int16_t q1_fixture_reference_result(uint16_t weight_scale_fp16,
+                                                   int32_t q8_scale_q16,
+                                                   uint32_t sign_word) {
+  return q1_fixture_reference_result_from_q8(
+      q1_fixture_fp16_to_q8(weight_scale_fp16), q8_scale_q16, sign_word);
 }
 
 static inline uint32_t q1_fixture_rotate_xor(uint32_t checksum,

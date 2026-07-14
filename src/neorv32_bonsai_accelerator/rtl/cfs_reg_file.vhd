@@ -21,6 +21,7 @@ entity cfs_reg_file is
     transfer_mode_o : out transfer_mode_t;
     matvec_rows_o   : out std_ulogic_vector(15 downto 0);
     matvec_groups_o : out std_ulogic_vector(15 downto 0);
+    matvec_scale_fixed_o : out std_ulogic;
 
     busy_i          : in std_ulogic;
     done_i          : in std_ulogic;
@@ -70,6 +71,7 @@ begin
   transfer_mode_o <= config_reg(CONFIG_TRANSFER_BIT_C);
   matvec_rows_o   <= matvec_shape_reg(MATVEC_ROWS_MSB_C downto MATVEC_ROWS_LSB_C);
   matvec_groups_o <= matvec_shape_reg(MATVEC_GROUPS_MSB_C downto MATVEC_GROUPS_LSB_C);
+  matvec_scale_fixed_o <= config_reg(CONFIG_Q1_SCALE_FIXED_BIT_C);
 
   bus_access : process(rstn_i, clk_i)
     variable word_addr_v : natural range 0 to 16383;
@@ -112,6 +114,8 @@ begin
                   config_reg(CONFIG_SERVICE_MSB_C downto CONFIG_SERVICE_LSB_C) <=
                     bus_req_i.data(CONFIG_SERVICE_MSB_C downto CONFIG_SERVICE_LSB_C);
                   config_reg(CONFIG_TRANSFER_BIT_C) <= bus_req_i.data(CONFIG_TRANSFER_BIT_C);
+                  config_reg(CONFIG_Q1_SCALE_FIXED_BIT_C) <=
+                    bus_req_i.data(CONFIG_Q1_SCALE_FIXED_BIT_C);
                 end if;
               when REG_MATVEC_SHAPE_C =>
                 if busy_i = '0' then

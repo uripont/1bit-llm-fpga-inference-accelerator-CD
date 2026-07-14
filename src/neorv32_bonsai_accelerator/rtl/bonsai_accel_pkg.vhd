@@ -7,7 +7,7 @@ package bonsai_accel_pkg is
 
   -- CFS identity and interface version (major.minor.patch in bits 31:8).
   constant BONSAI_ACCEL_ID_C      : std_ulogic_vector(31 downto 0) := x"424E5341"; -- "BNSA"
-  constant BONSAI_ACCEL_VERSION_C : std_ulogic_vector(31 downto 0) := x"00010100";
+  constant BONSAI_ACCEL_VERSION_C : std_ulogic_vector(31 downto 0) := x"00010200";
 
   -- CFS word-addressed register map.
   constant REG_ID_C                : natural := 0;  -- 0x00, read-only
@@ -81,6 +81,12 @@ package bonsai_accel_pkg is
   constant TRANSFER_CPU_PUSH_C  : transfer_mode_t := '0';
   constant TRANSFER_MEM_STREAM_C : transfer_mode_t := '1';
   constant CONFIG_TRANSFER_BIT_C : natural := 8;
+  constant CONFIG_Q1_SCALE_FIXED_BIT_C : natural := 9;
+
+  -- Q1 scale format at the engine boundary. GGUF rows use FP16; the Tier 3
+  -- synthetic board fixture supplies its already-converted signed Q8 scale.
+  constant Q1_SCALE_FP16_C    : std_ulogic := '0';
+  constant Q1_SCALE_FIXED_Q8_C : std_ulogic := '1';
 
   -- Matvec shape register: groups per row in the low half, rows in the high half.
   constant MATVEC_GROUPS_LSB_C : natural := 0;

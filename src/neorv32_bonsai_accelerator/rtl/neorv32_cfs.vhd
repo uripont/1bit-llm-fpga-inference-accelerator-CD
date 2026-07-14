@@ -25,6 +25,7 @@ architecture bonsai_accel_rtl of neorv32_cfs is
   signal config_service : service_t;
   signal config_transfer : transfer_mode_t;
   signal config_matvec_rows, config_matvec_groups : std_ulogic_vector(15 downto 0);
+  signal config_matvec_scale_fixed : std_ulogic;
 
   signal status_busy, status_done, status_error : std_ulogic;
   signal selected_service : service_t;
@@ -144,6 +145,7 @@ begin
       transfer_mode_o => config_transfer,
       matvec_rows_o => config_matvec_rows,
       matvec_groups_o => config_matvec_groups,
+      matvec_scale_fixed_o => config_matvec_scale_fixed,
       busy_i => status_busy,
       done_i => status_done,
       error_i => status_error,
@@ -293,6 +295,7 @@ begin
       launch_i => q1_launch,
       rows_i => config_matvec_rows,
       groups_i => config_matvec_groups,
+      scale_fixed_i => config_matvec_scale_fixed,
       transaction_valid_o => q1_transaction_valid,
       transaction_ready_i => q1_transaction_ready,
       transaction_direction_o => q1_transaction_direction,

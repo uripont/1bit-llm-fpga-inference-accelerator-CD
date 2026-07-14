@@ -8,6 +8,7 @@
 #define TERMINAL_MASK (BONSAI_STATUS_DONE | BONSAI_STATUS_ERROR)
 #define POLL_LIMIT UINT32_C(200000)
 #define TEST_WORDS 4u
+#define Q1_BLOCK_PIPELINE_CYCLES 3u
 
 struct command_metrics {
   uint32_t command_cycles;
@@ -74,20 +75,26 @@ static uint32_t fixture_q1_word(enum q1_fixture_mode mode,
 static int16_t fixture_reference(enum q1_fixture_mode mode,
                                  unsigned int row,
                                  unsigned int groups,
-                                 uint16_t fixed_weight_scale_fp16,
+                                 enum bonsai_accel_q1_scale_format scale_format,
+                                 uint16_t fixed_weight_scale,
                                  int32_t fixed_q8_scale_q16,
                                  uint32_t fixed_sign_word) {
   return mode == Q1_FIXTURE_BONSAI_ROW
              ? q1_fixture_bonsai_reference_result(row, groups)
-             : q1_fixture_reference_result(fixed_weight_scale_fp16,
-                                           fixed_q8_scale_q16,
-                                           fixed_sign_word);
+             : scale_format == BONSAI_Q1_SCALE_FIXED_Q8
+                   ? q1_fixture_reference_result_from_q8(
+                         (int32_t)(int16_t)fixed_weight_scale,
+                         fixed_q8_scale_q16, fixed_sign_word)
+                   : q1_fixture_reference_result(fixed_weight_scale,
+                                                 fixed_q8_scale_q16,
+                                                 fixed_sign_word);
 }
 
 static int run_q1_arithmetic(enum q1_fixture_mode mode,
                              uint16_t rows,
                              uint16_t groups,
-                             uint16_t weight_scale_fp16,
+                             enum bonsai_accel_q1_scale_format scale_format,
+                             uint16_t weight_scale,
                              int32_t q8_scale_q16,
                              uint32_t sign_word,
                              struct command_metrics *metrics,
@@ -106,7 +113,7 @@ static int run_q1_arithmetic(enum q1_fixture_mode mode,
 
   bonsai_accel_write(
       BONSAI_REG_CONFIG,
-      bonsai_accel_config(BONSAI_SERVICE_Q1_MATVEC, BONSAI_TRANSFER_CPU_PUSH));
+      bonsai_accel_matvec_config(BONSAI_TRANSFER_CPU_PUSH, scale_format));
   bonsai_accel_write(BONSAI_REG_COMMAND, BONSAI_COMMAND_START);
 
   for (uint32_t poll = 0; poll < POLL_LIMIT; ++poll) {
@@ -147,7 +154,7 @@ static int run_q1_arithmetic(enum q1_fixture_mode mode,
                  words_left > 0 && words_left <= BONSAI_Q1_GROUP_WORDS &&
                  q1_word == BONSAI_Q1_GROUP_WORDS - words_left) {
         word = fixture_q1_word(mode, tile / groups, tile % groups, q1_word,
-                               weight_scale_fp16, sign_word);
+                               weight_scale, sign_word);
         if (++q1_word == BONSAI_Q1_GROUP_WORDS) {
           q1_word = 0;
           ++q1_transaction;
@@ -186,7 +193,8 @@ static int run_q1_arithmetic(enum q1_fixture_mode mode,
       metrics->active_cycles ==
           rows * (groups *
                       (BONSAI_Q8_BLOCKS_PER_Q1 * BONSAI_Q8_BLOCK_WORDS +
-                       BONSAI_Q1_GROUP_WORDS + BONSAI_Q1_GROUP_ELEMENTS) +
+                       BONSAI_Q1_GROUP_WORDS +
+                       BONSAI_Q8_BLOCKS_PER_Q1 * Q1_BLOCK_PIPELINE_CYCLES) +
                   BONSAI_MATVEC_OUTPUT_WORDS) &&
       metrics->input_wait_cycles != 0 && metrics->output_wait_cycles == 0 &&
       metrics->frontend_input_wait != 0 && metrics->frontend_output_wait != 0 &&
@@ -199,7 +207,7 @@ static int run_q1_arithmetic(enum q1_fixture_mode mode,
 
   for (unsigned int row = 0; row < rows; ++row) {
     if (output_words[row] != (uint32_t)(int32_t)fixture_reference(
-                                 mode, row, groups, weight_scale_fp16,
+                                 mode, row, groups, scale_format, weight_scale,
                                  q8_scale_q16, sign_word)) {
       bonsai_accel_write(BONSAI_REG_COMMAND, BONSAI_COMMAND_ACK);
       return 0;
@@ -307,8 +315,8 @@ int main(void) {
     return 1;
   }
 
-  const int16_t base_reference = q1_fixture_reference_result(
-      Q1_FIXTURE_WEIGHT_SCALE_FP16, Q1_FIXTURE_Q8_SCALE_Q16,
+  const int16_t base_reference = q1_fixture_reference_result_from_q8(
+      Q1_FIXTURE_WEIGHT_SCALE_FIXED_Q8, Q1_FIXTURE_Q8_SCALE_Q16,
       Q1_FIXTURE_SIGN_WORD);
   const int16_t saturation_reference = q1_fixture_reference_result(
       Q1_FIXTURE_WEIGHT_SCALE_FP16, Q1_FIXTURE_SATURATING_Q8_SCALE_Q16,
@@ -318,19 +326,22 @@ int main(void) {
   if (base_reference != 64 || saturation_reference != 32767 ||
       !run_q1_arithmetic(
           Q1_FIXTURE_FIXED, Q1_FIXTURE_ROWS, Q1_FIXTURE_GROUPS,
-          Q1_FIXTURE_WEIGHT_SCALE_FP16, Q1_FIXTURE_Q8_SCALE_Q16,
+          BONSAI_Q1_SCALE_FIXED_Q8, Q1_FIXTURE_WEIGHT_SCALE_FIXED_Q8,
+          Q1_FIXTURE_Q8_SCALE_Q16,
           Q1_FIXTURE_SIGN_WORD, &q1_base_metrics, q1_base_output) ||
       !run_q1_arithmetic(
           Q1_FIXTURE_FIXED, Q1_FIXTURE_ROWS, Q1_FIXTURE_GROUPS,
-          Q1_FIXTURE_WEIGHT_SCALE_FP16, Q1_FIXTURE_SATURATING_Q8_SCALE_Q16,
+          BONSAI_Q1_SCALE_FP16, Q1_FIXTURE_WEIGHT_SCALE_FP16,
+          Q1_FIXTURE_SATURATING_Q8_SCALE_Q16,
           Q1_FIXTURE_SIGN_WORD, &q1_saturation_metrics,
           q1_saturation_output) ||
       !run_q1_arithmetic(
           Q1_FIXTURE_BONSAI_ROW, Q1_FIXTURE_ROWS, Q1_FIXTURE_BONSAI_GROUPS,
-          0, 0, 0, &q1_bonsai_row_metrics, q1_bonsai_row_output) ||
+          BONSAI_Q1_SCALE_FP16, 0, 0, 0,
+          &q1_bonsai_row_metrics, q1_bonsai_row_output) ||
       !run_q1_arithmetic(
           Q1_FIXTURE_BONSAI_ROW, Q1_FIXTURE_MULTI_ROWS,
-          Q1_FIXTURE_MULTI_GROUPS, 0, 0, 0,
+          Q1_FIXTURE_MULTI_GROUPS, BONSAI_Q1_SCALE_FP16, 0, 0, 0,
           &q1_multi_row_metrics, q1_multi_row_output) ||
       !run_attention_probe(&attention_metrics)) {
     neorv32_uart0_printf("shell_probe=FAIL reason=cpu_push\n");
@@ -358,7 +369,7 @@ int main(void) {
       "q1_base reference=%i output=%i checksum=0x%x\n",
       (int32_t)base_reference, (int32_t)q1_base_output[0],
       q1_fixture_transport_checksum(
-          Q1_FIXTURE_WEIGHT_SCALE_FP16, Q1_FIXTURE_Q8_SCALE_Q16,
+          Q1_FIXTURE_WEIGHT_SCALE_FIXED_Q8, Q1_FIXTURE_Q8_SCALE_Q16,
           Q1_FIXTURE_SIGN_WORD));
   neorv32_uart0_printf("q1_saturation reference=%i output=%i\n",
                       (int32_t)saturation_reference,

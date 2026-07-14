@@ -5,7 +5,7 @@
 #include <neorv32.h>
 
 #define BONSAI_ACCEL_ID UINT32_C(0x424e5341)
-#define BONSAI_ACCEL_VERSION UINT32_C(0x00010100)
+#define BONSAI_ACCEL_VERSION UINT32_C(0x00010200)
 
 enum bonsai_accel_register {
   BONSAI_REG_ID = 0,
@@ -100,6 +100,13 @@ enum bonsai_accel_error {
 #define BONSAI_CONFIG_SERVICE_MASK UINT32_C(0x00000003)
 #define BONSAI_CONFIG_TRANSFER_SHIFT 8
 #define BONSAI_CONFIG_TRANSFER_MASK UINT32_C(0x00000100)
+#define BONSAI_CONFIG_Q1_SCALE_FIXED_SHIFT 9
+#define BONSAI_CONFIG_Q1_SCALE_FIXED_MASK UINT32_C(0x00000200)
+
+enum bonsai_accel_q1_scale_format {
+  BONSAI_Q1_SCALE_FP16 = 0,
+  BONSAI_Q1_SCALE_FIXED_Q8 = 1,
+};
 
 #define BONSAI_MATVEC_GROUPS_SHIFT 0
 #define BONSAI_MATVEC_GROUPS_MASK UINT32_C(0x0000ffff)
@@ -126,6 +133,14 @@ static inline uint32_t bonsai_accel_config(enum bonsai_accel_service service,
   return ((uint32_t) service & BONSAI_CONFIG_SERVICE_MASK) |
          (((uint32_t) transfer << BONSAI_CONFIG_TRANSFER_SHIFT) &
           BONSAI_CONFIG_TRANSFER_MASK);
+}
+
+static inline uint32_t bonsai_accel_matvec_config(
+    enum bonsai_accel_transfer_mode transfer,
+    enum bonsai_accel_q1_scale_format scale_format) {
+  return bonsai_accel_config(BONSAI_SERVICE_Q1_MATVEC, transfer) |
+         (((uint32_t)scale_format << BONSAI_CONFIG_Q1_SCALE_FIXED_SHIFT) &
+          BONSAI_CONFIG_Q1_SCALE_FIXED_MASK);
 }
 
 static inline uint32_t bonsai_accel_matvec_shape(uint16_t rows,
