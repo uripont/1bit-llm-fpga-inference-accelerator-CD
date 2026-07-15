@@ -1,0 +1,67 @@
+../../../../neorv32-setups/neorv32/sw/lib/source/neorv32_uart.c: In function 'neorv32_uart_setup':
+../../../../neorv32-setups/neorv32/sw/lib/source/neorv32_uart.c:92:2: warning: #warning UART0_SIM_MODE (primary UART) enabled! Sending all UART0.TX data to text.io simulation output instead of real UART0 transmitter. Use this for simulation only! [-Wcpp]
+   92 | #warning UART0_SIM_MODE (primary UART) enabled! \
+      |  ^~~~~~~
+Memory utilization:
+   text	   data	    bss	    dec	    hex	filename
+   5508	      0	    576	   6084	   17c4	main.elf
+Compiling image generator...
+Generating neorv32_imem_image.vhd
+Executable (VHD): 5508 bytes
+IMEM_SIZE=262144 DMEM_SIZE=131072 STOP_TIME=8ms \
+SUCCESS_PATTERN=evaluation_status=PASS \
+../../sim/run-ghdl.sh "/workspaces/1bit-llm-fpga-inference-accelerator-CD/src/neorv32_bonsai_accelerator/sw/attention_kv_evaluation/neorv32_imem_image.vhd"
+[1/3] Importing NEORV32 and Bonsai accelerator RTL
+[2/3] Elaborating the complete NEORV32 testbench
+[3/3] Running the CFS firmware
+/workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_cpu.vhd:153:5:@0ms:(assertion note): [NEORV32] CPU ISA: rv32iabcmux_zaamo_zalrsc_zba_zbb_zbc_zbkb_zbkc_zbkx_zbs_zca_zcb_zfinx_zibi_zicntr_zicond_zicsr_zifencei_zihpm_zimop_zkn_zknd_zkne_zknh_zks_zksed_zksh_zkt_zmmul_sdext_sdtrig_smcntrpmf_smpmp_xcfu
+/workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_cpu.vhd:197:5:@0ms:(assertion note): [NEORV32] CPU tuning options: trace fast_mul fast_shift rf_arch=sram_sync 
+/workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_cache_ram.vhd:47:3:@0ms:(assertion note): [NEORV32] Using default CACHE RAM component.
+/workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_cache_ram.vhd:47:3:@0ms:(assertion note): [NEORV32] Using default CACHE RAM component.
+/workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_imem_rom.vhd:42:3:@0ms:(assertion note): [NEORV32] Using default IMEM ROM component (8192 bytes).
+/workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_dmem_ram.vhd:40:3:@0ms:(assertion note): [NEORV32] Using default DMEM RAM component (131072 bytes).
+/workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_trng.vhd:303:3:@0ms:(assertion note): [neoTRNG] The neoTRNG (v3.4) - A Tiny and Platform-Independent True Random Number Generator, github.com/stnolting/neoTRNG
+/workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_trng.vhd:313:3:@0ms:(assertion warning): [neoTRNG] Simulation-mode enabled (NO TRUE/PHYSICAL RANDOM)!
+/workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_tracer.vhd:254:5:@0ms:(assertion note): [NEORV32] CPU 0 trace logging enabled -> neorv32.tracer0.log
+/workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_debug_auth.vhd:67:3:@0ms:(assertion warning): [NEORV32] Using DEFAULT on-chip debugger authenticator. Replace by custom module.
+/workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_top.vhd:384:5:@0ms:(assertion note): [NEORV32] The NEORV32 RISC-V Processor (v01.13.02.00), github.com/stnolting/neorv32
+/workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_top.vhd:393:5:@0ms:(assertion note): [NEORV32] Processor Configuration: CPU (single-core) IMEM-ROM DMEM I-CACHE D-CACHE XBUS CLINT GPIO UART0 UART1 SPI SDI TWI TWD PWM WDT TRNG CFS NEOLED GPTMR ONEWIRE DMA SLINK SYSINFO TRACER OCD OCD-AUTH OCD-HWBP 
+/workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_top.vhd:429:5:@0ms:(assertion warning): [NEORV32] Assuming this is a simulation.
+/workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_top.vhd:441:5:@0ms:(assertion note): [NEORV32] BOOT_MODE_SELECT 2 - booting IMEM image
+[progress] Proposal B CPU_PUSH bonsai evaluation: 31s elapsed
+kernel=attention_kv_engine
+backend=hardware_neorv32_cfs
+transfer_mode=cpu_push
+cpu_push_strategy=tile_burst_prepacked
+input_source=synthetic_q8
+normalization_mode=stable_softmax_fixed_q16
+heads=2
+kv_heads=1
+head_dim=16
+ctx=2
+append_position=1
+score_mac=64
+value_mac=64
+softmax_elements=4
+input_transactions=8
+output_transactions=4
+command_cycles=4756
+engine_cycles=4209
+active_cycles=140
+input_wait_cycles=2475
+output_wait_cycles=0
+control_cycles=1594
+frontend_input_wait=2403
+frontend_output_wait=4289
+[progress] Proposal B CPU_PUSH bonsai evaluation: 61s elapsed
+input_bytes=256
+output_bytes=128
+work_mac=128
+checksum=7569
+expected_checksum=7569
+evaluation_status=PASS
+[progress] Proposal B CPU_PUSH bonsai evaluation: 92s elapsed
+[progress] Proposal B CPU_PUSH bonsai evaluation: 122s elapsed
+[progress] Proposal B CPU_PUSH bonsai evaluation: 152s elapsed
+/usr/bin/ghdl-mcode:info: simulation stopped by --stop-time @8ms
+[pass] CFS firmware success marker: evaluation_status=PASS

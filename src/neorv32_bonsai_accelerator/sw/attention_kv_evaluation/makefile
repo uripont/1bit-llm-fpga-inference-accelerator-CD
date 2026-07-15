@@ -1,0 +1,34 @@
+# NEORV32 firmware for Proposal B CPU_PUSH evaluation.
+
+MARCH = rv32i_zicsr_zifencei
+EFFORT = -Os
+RISCV_PREFIX ?= riscv32-unknown-elf-
+
+ATTENTION_HEADS ?= 1
+ATTENTION_KV_HEADS ?= 1
+ATTENTION_HEAD_DIM ?= 32
+ATTENTION_CTX ?= 2
+EXPECTED_CHECKSUM ?=
+ROM_SIZE ?= 16k
+RAM_SIZE ?= 8k
+
+USER_FLAGS += -DUART0_SIM_MODE
+USER_FLAGS += -DATTENTION_HEADS=$(ATTENTION_HEADS)u
+USER_FLAGS += -DATTENTION_KV_HEADS=$(ATTENTION_KV_HEADS)u
+USER_FLAGS += -DATTENTION_HEAD_DIM=$(ATTENTION_HEAD_DIM)u
+USER_FLAGS += -DATTENTION_CTX=$(ATTENTION_CTX)u
+USER_FLAGS += -DEXPECTED_CHECKSUM=$(EXPECTED_CHECKSUM)
+USER_FLAGS += -Wl,--defsym,__neorv32_rom_size=$(ROM_SIZE)
+USER_FLAGS += -Wl,--defsym,__neorv32_ram_size=$(RAM_SIZE)
+
+APP_SRC = main.c
+
+NEORV32_HOME ?= ../../../../neorv32-setups/neorv32
+
+include $(NEORV32_HOME)/sw/common/common.mk
+
+.PHONY: attention-sim
+attention-sim: $(APP_VHD)
+	IMEM_SIZE=$(IMEM_SIZE) DMEM_SIZE=$(DMEM_SIZE) STOP_TIME=$(STOP_TIME) \
+	SUCCESS_PATTERN=evaluation_status=PASS \
+	../../sim/run-ghdl.sh "$(CURDIR)/$(APP_VHD)"

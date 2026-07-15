@@ -27,3 +27,13 @@ results/proposal_a_evaluation/q1_matvec/*
 !results/proposal_a_evaluation/q1_matvec/board/*
 !results/proposal_a_evaluation/q1_matvec/bonsai/
 !results/proposal_a_evaluation/q1_matvec/bonsai/*
+!results/proposal_b_evaluation/
+results/proposal_b_evaluation/*
+!results/proposal_b_evaluation/attention_kv/
+results/proposal_b_evaluation/attention_kv/*
+!results/proposal_b_evaluation/attention_kv/cpu_push/
+!results/proposal_b_evaluation/attention_kv/cpu_push/*
+!results/proposal_b_evaluation/attention_kv/cpu_push/board/
+!results/proposal_b_evaluation/attention_kv/cpu_push/board/*
+!results/proposal_b_evaluation/attention_kv/cpu_push/bonsai/
+!results/proposal_b_evaluation/attention_kv/cpu_push/bonsai/*

@@ -85,3 +85,31 @@ the complete tile through a tight MMIO burst. This keeps the full service 4.5x
 to 7.0x faster than Tier 3 software without depending on `MEM_STREAM`.
 `MEM_STREAM` remains a separate memory-path optimization, primarily for the
 attention/KV proposal and later sustained-workload evaluation.
+
+## Evaluate Proposal B CPU push
+
+The dedicated firmware under `sw/attention_kv_evaluation/` uses the Tier 3
+board and GQA compatibility fixtures. It prepares all payloads before launch,
+services each requested tile with a tight MMIO burst, validates append
+writeback and final signed-16 output vectors, and reports hardware-owned cycles,
+waits, traffic, work and transaction counts. Run both profiles from the
+repository root with:
+
+```sh
+python3 src/neorv32_bonsai_accelerator/evaluate-attention-kv-cpu-push.py
+```
+
+Logs and summaries are written under
+`results/proposal_b_evaluation/attention_kv/cpu_push/`. The compatibility
+evaluation produced:
+
+| Profile | Tier 3 software | `CPU_PUSH` command | Engine active | Command speedup | Active-cycle speedup |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Board, H1/KVH1/D32/C2 | 489,007 | 5,344 | 166 | 91.506x | 2,945.825x |
+| Bonsai GQA, H2/KVH1/D16/C2 | 494,741 | 4,756 | 140 | 104.025x | 3,533.864x |
+
+Both outputs match the Tier 3 checksums, 5,274 and 7,569. The compute engine is
+therefore complete under `CPU_PUSH`, but utilization remains 3.787% for board
+and 3.326% for GQA because the engine spends most elapsed cycles waiting for
+CPU-provided input. These results establish the straightforward hardware
+baseline for the subsequent `MEM_STREAM` implementation.
