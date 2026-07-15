@@ -1,4 +1,4 @@
--- Attention/KV engine with tiled transport and fixed-point QK score computation.
+-- Tiled attention/KV service with fixed-point score, softmax and value phases.
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -57,7 +57,8 @@ architecture rtl of attn_kv_engine is
     REQUEST_QUERY, CONSUME_QUERY,
     SELECT_K_POSITION, SCORE_CURRENT_K, REQUEST_K_CACHE, CONSUME_K_CACHE,
     NORMALIZE_FIND_MAX, NORMALIZE_EXP_SUM, NORMALIZE_DIVIDE,
-    SELECT_V_POSITION, REQUEST_V_CACHE, CONSUME_V_CACHE,
+    SELECT_V_POSITION, ACCUMULATE_CURRENT_V,
+    REQUEST_V_CACHE, CONSUME_V_CACHE,
     REQUEST_OUTPUT, PRODUCE_OUTPUT,
     ERROR_STATE
   );
@@ -71,7 +72,6 @@ architecture rtl of attn_kv_engine is
   signal context_index : natural range 0 to 65534;
   signal segment_index : natural range 0 to MAX_SEGMENTS_C - 1;
   signal word_index : natural range 0 to ATTN_VECTOR_TILE_WORDS_C - 1;
-  signal append_checksum, head_checksum : unsigned(31 downto 0);
   type append_tile_t is array (0 to ATTN_VECTOR_TILE_WORDS_C - 1) of
     std_ulogic_vector(31 downto 0);
   signal append_tile : append_tile_t;
@@ -80,15 +80,18 @@ architecture rtl of attn_kv_engine is
     0 to ATTN_MAX_KV_HEADS_C * ATTN_MAX_HEAD_DIM_C - 1) of signed(15 downto 0);
   type score_memory_t is array (0 to ATTN_SCORE_CAPACITY_C - 1) of signed(39 downto 0);
   type weight_memory_t is array (0 to ATTN_SCORE_CAPACITY_C - 1) of unsigned(15 downto 0);
+  type output_accumulator_t is array (
+    0 to ATTN_MAX_HEAD_DIM_C - 1) of signed(40 downto 0);
   signal query_values : vector_t;
   signal current_k_values, current_v_values : kv_vector_t;
   signal scores : score_memory_t;
   signal normalized_weights : weight_memory_t;
+  signal output_accumulators : output_accumulator_t;
   signal score_accumulator : signed(39 downto 0);
   signal max_score : signed(39 downto 0);
   signal exp_sum : unsigned(24 downto 0);
-  signal score_checksum, normalization_checksum : unsigned(31 downto 0);
   signal score_word_index : natural range 0 to ATTN_MAX_HEAD_DIM_C / 2 - 1;
+  signal value_word_index : natural range 0 to ATTN_MAX_HEAD_DIM_C / 2 - 1;
   signal normalization_index : natural range 0 to ATTN_SCORE_CAPACITY_C - 1;
   signal input_accept, output_accept : std_ulogic;
   signal tile_words : natural range 1 to ATTN_VECTOR_TILE_WORDS_C;
@@ -106,15 +109,8 @@ architecture rtl of attn_kv_engine is
     end case;
   end function;
 
-  function fold_score(value : signed(39 downto 0)) return unsigned is
-    variable extended : signed(63 downto 0);
-  begin
-    extended := resize(value, 64);
-    return unsigned(extended(31 downto 0)) xor
-           unsigned(extended(63 downto 32));
-  end function;
-
   type exp_lut_t is array (natural range <>) of natural;
+  -- Scores use Q16.16; exponentials and normalized weights use unsigned Q0.16.
   constant EXP_INTEGER_Q16_C : exp_lut_t(0 to 11) := (
     65536, 24109, 8869, 3263, 1200, 442, 162, 60, 22, 8, 3, 1);
   constant EXP_FRACTION_Q16_C : exp_lut_t(0 to 15) := (
@@ -138,6 +134,23 @@ architecture rtl of attn_kv_engine is
                to_unsigned(EXP_FRACTION_Q16_C(fraction_index), 17);
     rounded := product + to_unsigned(32768, 34);
     return resize(shift_right(rounded, 16), 17);
+  end function;
+
+  function rounded_output(value : signed(40 downto 0)) return signed is
+    variable rounded, magnitude : signed(40 downto 0);
+  begin
+    if value >= 0 then
+      rounded := shift_right(value + to_signed(32768, 41), 16);
+    else
+      magnitude := -value;
+      rounded := -shift_right(magnitude + to_signed(32768, 41), 16);
+    end if;
+    if rounded > to_signed(32767, 41) then
+      return to_signed(32767, 16);
+    elsif rounded < to_signed(-32768, 41) then
+      return to_signed(-32768, 16);
+    end if;
+    return resize(rounded, 16);
   end function;
 
   function words_for_segment(
@@ -199,11 +212,10 @@ begin
     (state = PRODUCE_OUTPUT) else '0';
   output_data_o <= append_tile(word_index) when
     (state = PRODUCE_APPEND_K) or (state = PRODUCE_APPEND_V) else
-    std_ulogic_vector(
-    head_checksum xor score_checksum xor normalization_checksum xor
-    shift_left(to_unsigned(head_index, 32), 24) xor
-    shift_left(to_unsigned(segment_index, 32), 16) xor
-    to_unsigned(word_index, 32));
+    std_ulogic_vector(rounded_output(output_accumulators(
+      segment_index * ATTN_VECTOR_TILE_ELEMENTS_C + word_index * 2 + 1))) &
+    std_ulogic_vector(rounded_output(output_accumulators(
+      segment_index * ATTN_VECTOR_TILE_ELEMENTS_C + word_index * 2)));
   output_accept <= output_valid_o and output_ready_i;
 
   busy_o <= '0' when (state = IDLE) or (state = ERROR_STATE) else '1';
@@ -216,7 +228,8 @@ begin
     (state = SCORE_CURRENT_K) or
     (state = NORMALIZE_FIND_MAX) or
     (state = NORMALIZE_EXP_SUM) or
-    (state = NORMALIZE_DIVIDE)
+    (state = NORMALIZE_DIVIDE) or
+    (state = ACCUMULATE_CURRENT_V)
     else input_accept or output_accept;
   input_wait_o <= '1' when input_ready_o = '1' and input_valid_i = '0' else '0';
   output_wait_o <= '1' when
@@ -239,6 +252,8 @@ begin
     variable next_exp_sum_v : unsigned(24 downto 0);
     variable weight_numerator_v : unsigned(32 downto 0);
     variable weight_v : unsigned(15 downto 0);
+    variable weight_signed_v : signed(16 downto 0);
+    variable value_product_v : signed(32 downto 0);
   begin
     if rstn_i = '0' then
       state           <= IDLE;
@@ -253,14 +268,11 @@ begin
       context_index   <= 0;
       segment_index   <= 0;
       word_index      <= 0;
-      append_checksum <= (others => '0');
-      head_checksum   <= (others => '0');
       score_accumulator <= (others => '0');
-      score_checksum <= (others => '0');
       max_score <= (others => '0');
       exp_sum <= (others => '0');
-      normalization_checksum <= (others => '0');
       score_word_index <= 0;
+      value_word_index <= 0;
       normalization_index <= 0;
     elsif rising_edge(clk_i) then
       case state is
@@ -295,14 +307,11 @@ begin
                 context_index   <= 0;
                 segment_index   <= 0;
                 word_index      <= 0;
-                append_checksum <= (others => '0');
-                head_checksum   <= (others => '0');
                 score_accumulator <= (others => '0');
-                score_checksum <= (others => '0');
                 max_score <= (others => '0');
                 exp_sum <= (others => '0');
-                normalization_checksum <= (others => '0');
                 score_word_index <= 0;
+                value_word_index <= 0;
                 normalization_index <= 0;
                 state           <= REQUEST_CURRENT_K;
               else
@@ -321,7 +330,6 @@ begin
 
         when CONSUME_CURRENT_K =>
           if input_accept = '1' then
-            append_checksum <= append_checksum xor unsigned(input_data_i);
             append_tile(word_index) <= input_data_i;
             element_base_v := segment_index * ATTN_VECTOR_TILE_ELEMENTS_C +
                               word_index * 2;
@@ -368,7 +376,6 @@ begin
 
         when CONSUME_CURRENT_V =>
           if input_accept = '1' then
-            append_checksum <= append_checksum xor unsigned(input_data_i);
             append_tile(word_index) <= input_data_i;
             element_base_v := segment_index * ATTN_VECTOR_TILE_ELEMENTS_C +
                               word_index * 2;
@@ -416,13 +423,14 @@ begin
         when PREPARE_HEAD =>
           segment_index <= 0;
           word_index <= 0;
-          head_checksum <= append_checksum;
-          score_checksum <= (others => '0');
-          normalization_checksum <= (others => '0');
           score_accumulator <= (others => '0');
           exp_sum <= (others => '0');
           score_word_index <= 0;
+          value_word_index <= 0;
           normalization_index <= 0;
+          for element in 0 to ATTN_MAX_HEAD_DIM_C - 1 loop
+            output_accumulators(element) <= (others => '0');
+          end loop;
           state <= REQUEST_QUERY;
 
         when REQUEST_QUERY =>
@@ -433,7 +441,6 @@ begin
 
         when CONSUME_QUERY =>
           if input_accept = '1' then
-            head_checksum <= head_checksum xor unsigned(input_data_i);
             element_base_v := segment_index * ATTN_VECTOR_TILE_ELEMENTS_C +
                               word_index * 2;
             query_values(element_base_v) <= signed(input_data_i(15 downto 0));
@@ -481,7 +488,6 @@ begin
             scaled_wide_v := next_score_v * inv_sqrt_q16(head_dim_count);
             scaled_score_v := resize(shift_right(scaled_wide_v, 16), 40);
             scores(context_index) <= scaled_score_v;
-            score_checksum <= score_checksum xor fold_score(scaled_score_v);
             score_word_index <= 0;
             score_accumulator <= (others => '0');
             if context_index = context_count - 1 then
@@ -504,7 +510,6 @@ begin
 
         when CONSUME_K_CACHE =>
           if input_accept = '1' then
-            head_checksum <= head_checksum xor unsigned(input_data_i);
             element_base_v := segment_index * ATTN_VECTOR_TILE_ELEMENTS_C +
                               word_index * 2;
             pair_sum_v := resize(
@@ -522,7 +527,6 @@ begin
                 scaled_wide_v := next_score_v * inv_sqrt_q16(head_dim_count);
                 scaled_score_v := resize(shift_right(scaled_wide_v, 16), 40);
                 scores(context_index) <= scaled_score_v;
-                score_checksum <= score_checksum xor fold_score(scaled_score_v);
                 score_accumulator <= (others => '0');
                 if context_index = context_count - 1 then
                   context_index <= 0;
@@ -574,9 +578,6 @@ begin
             resize(shift_right(exp_sum, 1), 33);
           weight_v := resize(weight_numerator_v / exp_sum, 16);
           normalized_weights(normalization_index) <= weight_v;
-          normalization_checksum <= normalization_checksum xor
-            shift_left(resize(weight_v, 32), normalization_index mod 16) xor
-            to_unsigned(normalization_index, 32);
           if normalization_index = context_count - 1 then
             normalization_index <= 0;
             context_index <= 0;
@@ -588,15 +589,40 @@ begin
 
         when SELECT_V_POSITION =>
           if context_index = append_position then
+            value_word_index <= 0;
+            state <= ACCUMULATE_CURRENT_V;
+          else
+            segment_index <= 0;
+            state <= REQUEST_V_CACHE;
+          end if;
+
+        when ACCUMULATE_CURRENT_V =>
+          element_base_v := value_word_index * 2;
+          current_base_v := mapped_kv_head * ATTN_MAX_HEAD_DIM_C + element_base_v;
+          weight_signed_v := signed(
+            '0' & std_ulogic_vector(normalized_weights(context_index)));
+          value_product_v :=
+            weight_signed_v * current_v_values(current_base_v);
+          output_accumulators(element_base_v) <=
+            output_accumulators(element_base_v) + resize(value_product_v, 41);
+          if element_base_v + 1 < head_dim_count then
+            value_product_v :=
+              weight_signed_v * current_v_values(current_base_v + 1);
+            output_accumulators(element_base_v + 1) <=
+              output_accumulators(element_base_v + 1) +
+              resize(value_product_v, 41);
+          end if;
+          if value_word_index = (head_dim_count + 1) / 2 - 1 then
+            value_word_index <= 0;
             if context_index = context_count - 1 then
               context_index <= 0;
               state <= REQUEST_OUTPUT;
             else
               context_index <= context_index + 1;
+              state <= SELECT_V_POSITION;
             end if;
           else
-            segment_index <= 0;
-            state <= REQUEST_V_CACHE;
+            value_word_index <= value_word_index + 1;
           end if;
 
         when REQUEST_V_CACHE =>
@@ -607,7 +633,21 @@ begin
 
         when CONSUME_V_CACHE =>
           if input_accept = '1' then
-            head_checksum <= head_checksum xor unsigned(input_data_i);
+            element_base_v := segment_index * ATTN_VECTOR_TILE_ELEMENTS_C +
+                              word_index * 2;
+            weight_signed_v := signed(
+              '0' & std_ulogic_vector(normalized_weights(context_index)));
+            value_product_v :=
+              weight_signed_v * signed(input_data_i(15 downto 0));
+            output_accumulators(element_base_v) <=
+              output_accumulators(element_base_v) + resize(value_product_v, 41);
+            if element_base_v + 1 < head_dim_count then
+              value_product_v :=
+                weight_signed_v * signed(input_data_i(31 downto 16));
+              output_accumulators(element_base_v + 1) <=
+                output_accumulators(element_base_v + 1) +
+                resize(value_product_v, 41);
+            end if;
             if word_index = tile_words - 1 then
               word_index <= 0;
               if segment_index = segment_count - 1 then

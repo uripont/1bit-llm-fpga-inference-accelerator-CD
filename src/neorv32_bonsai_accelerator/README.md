@@ -9,15 +9,15 @@ shared register map, service and transfer identifiers, semantic tile roles,
 command lifecycle, and per-command counters. The attention service contract
 adds query-head, KV-head, head-dimension, context-length, and append-position
 configuration, with signed-16 vectors split into indexed 32-element tiles.
-The attention/KV transaction skeleton follows append-first ordering, maps query
-heads to grouped-query KV heads, returns current K/V as append-writeback tiles,
-traverses historical K and V tiles, and emits deterministic placeholder
-attention outputs for transport validation. Its score phase retains the active
-query and current K vectors, computes scaled signed-16 QK dot products, and
-stores one signed Q16.16 score per context position. Stable normalization finds
-the maximum score, evaluates a bounded fixed-point exponential, accumulates the
-denominator, and retains Q0.16 weights. Weighted-V arithmetic remains a
-subsequent stage. Proposal A now has a board-sized
+The attention/KV engine follows append-first ordering, maps query heads to
+grouped-query KV heads, returns current K/V as append-writeback tiles, and
+traverses historical K and V tiles. Its score phase retains the active query and
+current K vectors, computes scaled signed-16 QK dot products, and stores one
+signed Q16.16 score per context position. Stable normalization finds the maximum
+score, evaluates a bounded fixed-point exponential, accumulates the denominator,
+and retains Q0.16 weights. The V phase multiplies those weights by historical or
+locally retained current-V elements, accumulates signed results, and emits
+rounded, saturated signed-16 attention vectors. Proposal A now has a board-sized
 transport contract for Q1_0 by Q8_0 rows. The matvec engine streams configured
 rows of 128-element groups, reduces 32 sign-controlled Q8 lanes per block,
 applies the Q1 and Q8 scales in separate pipeline stages, preserves a 64-bit
@@ -46,9 +46,8 @@ simulated UART output. The probe runs both service selections, validates the
 Q1/Q8 tile sequence and deterministic fixtures, including a 16-group,
 2048-element row and a multi-row command, checks counter identity and FIFO
 payloads, acknowledges repeated commands, checks both attention compatibility
-shapes, their role-tagged tile sequences, GQA mapping, QK score and normalized
-weight signatures, invalid-shape rejection, and the current `MEM_STREAM` error
-behavior.
+shapes, their role-tagged tile sequences, GQA mapping, complete attention output
+vectors, invalid-shape rejection, and the current `MEM_STREAM` error behavior.
 The two-word FIFOs exercise CPU-side backpressure, while local tiles keep the
 engines independent of CPU drain timing.
 

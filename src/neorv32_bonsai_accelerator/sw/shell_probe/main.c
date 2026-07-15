@@ -306,51 +306,6 @@ static uint32_t expected_attention_input_hash(
   return hash;
 }
 
-static uint32_t expected_attention_head_checksum(
-    const struct attention_profile *profile, unsigned int selected_head) {
-  const unsigned int segments = attention_segments(profile->head_dim);
-  const unsigned int mapped_kv_head =
-      selected_head * profile->kv_heads / profile->heads;
-  uint32_t append_checksum = 0;
-
-  for (unsigned int kv_head = 0; kv_head < profile->kv_heads; ++kv_head) {
-    for (unsigned int role = BONSAI_ROLE_CURRENT_K;
-         role <= BONSAI_ROLE_CURRENT_V; ++role) {
-      for (unsigned int segment = 0; segment < segments; ++segment) {
-        const unsigned int tile = kv_head * segments + segment;
-        const unsigned int words = attention_segment_words(profile->head_dim, segment);
-        for (unsigned int word = 0; word < words; ++word) {
-          append_checksum ^= attention_fixture_word(role, tile, word);
-        }
-      }
-    }
-  }
-
-  uint32_t checksum = append_checksum;
-  for (unsigned int segment = 0; segment < segments; ++segment) {
-    const unsigned int tile = selected_head * segments + segment;
-    const unsigned int words = attention_segment_words(profile->head_dim, segment);
-    for (unsigned int word = 0; word < words; ++word) {
-      checksum ^= attention_fixture_word(BONSAI_ROLE_QUERY, tile, word);
-    }
-  }
-  for (unsigned int role = BONSAI_ROLE_K_CACHE;
-       role <= BONSAI_ROLE_V_CACHE; ++role) {
-    for (unsigned int position = 0; position < profile->context; ++position) {
-      if (position == profile->append_position) continue;
-      for (unsigned int segment = 0; segment < segments; ++segment) {
-        const unsigned int tile =
-            (mapped_kv_head * profile->context + position) * segments + segment;
-        const unsigned int words = attention_segment_words(profile->head_dim, segment);
-        for (unsigned int word = 0; word < words; ++word) {
-          checksum ^= attention_fixture_word(role, tile, word);
-        }
-      }
-    }
-  }
-  return checksum;
-}
-
 static int32_t attention_inv_sqrt_q16(unsigned int head_dim) {
   switch (head_dim) {
     case 16: return 16384;
@@ -400,18 +355,6 @@ static int64_t attention_reference_score(
   return (dot * attention_inv_sqrt_q16(profile->head_dim)) >> 16;
 }
 
-static uint32_t expected_attention_score_checksum(
-    const struct attention_profile *profile, unsigned int selected_head) {
-  uint32_t checksum = 0;
-
-  for (unsigned int position = 0; position < profile->context; ++position) {
-    const int64_t scaled =
-        attention_reference_score(profile, selected_head, position);
-    checksum ^= (uint32_t)scaled ^ (uint32_t)((uint64_t)scaled >> 32);
-  }
-  return checksum;
-}
-
 static uint32_t attention_exp_negative_q16(int64_t delta) {
   static const uint32_t integer_lut[12] = {
       65536, 24109, 8869, 3263, 1200, 442, 162, 60, 22, 8, 3, 1};
@@ -427,29 +370,61 @@ static uint32_t attention_exp_negative_q16(int64_t delta) {
                      fraction_lut[fraction_index] + 32768u) >> 16);
 }
 
-static uint32_t expected_attention_normalization_checksum(
-    const struct attention_profile *profile, unsigned int selected_head) {
+static int16_t attention_round_output(int64_t value) {
+  const int64_t rounded = value >= 0
+                              ? (value + 32768) >> 16
+                              : -(((-value) + 32768) >> 16);
+  if (rounded > INT16_MAX) return INT16_MAX;
+  if (rounded < INT16_MIN) return INT16_MIN;
+  return (int16_t)rounded;
+}
+
+static int build_attention_reference_output(
+    const struct attention_profile *profile, unsigned int selected_head,
+    int16_t output[BONSAI_ATTN_MAX_HEAD_DIM]) {
+  int64_t scores[2];
+  uint32_t weights[2];
   int64_t max_score = INT64_MIN;
   uint32_t denominator = 0;
-  uint32_t checksum = 0;
+  const unsigned int segments = attention_segments(profile->head_dim);
+  const unsigned int mapped_kv_head =
+      selected_head * profile->kv_heads / profile->heads;
 
+  if (profile->context > 2u) return 0;
   for (unsigned int position = 0; position < profile->context; ++position) {
-    const int64_t score =
+    scores[position] =
         attention_reference_score(profile, selected_head, position);
-    if (score > max_score) max_score = score;
+    if (scores[position] > max_score) max_score = scores[position];
   }
   for (unsigned int position = 0; position < profile->context; ++position) {
-    denominator += attention_exp_negative_q16(
-        attention_reference_score(profile, selected_head, position) - max_score);
+    denominator += attention_exp_negative_q16(scores[position] - max_score);
   }
   for (unsigned int position = 0; position < profile->context; ++position) {
-    const uint32_t exponential = attention_exp_negative_q16(
-        attention_reference_score(profile, selected_head, position) - max_score);
-    const uint32_t weight = (uint32_t)(
+    const uint32_t exponential =
+        attention_exp_negative_q16(scores[position] - max_score);
+    weights[position] = (uint32_t)(
         ((uint64_t)exponential * 65535u + denominator / 2u) / denominator);
-    checksum ^= (weight << (position % 16u)) ^ position;
   }
-  return checksum;
+
+  for (unsigned int element = 0; element < profile->head_dim; ++element) {
+    const unsigned int segment =
+        element / BONSAI_ATTN_VECTOR_TILE_ELEMENTS;
+    const unsigned int element_in_segment =
+        element % BONSAI_ATTN_VECTOR_TILE_ELEMENTS;
+    int64_t accumulator = 0;
+    for (unsigned int position = 0; position < profile->context; ++position) {
+      const unsigned int role = position == profile->append_position
+                                    ? BONSAI_ROLE_CURRENT_V
+                                    : BONSAI_ROLE_V_CACHE;
+      const unsigned int tile = position == profile->append_position
+          ? mapped_kv_head * segments + segment
+          : (mapped_kv_head * profile->context + position) * segments + segment;
+      accumulator += (int64_t)weights[position] *
+                     attention_fixture_element(role, tile, element_in_segment);
+    }
+    output[element] = attention_round_output(accumulator);
+  }
+  return 1;
 }
 
 static uint32_t expected_attention_output_hash(
@@ -478,7 +453,7 @@ static uint32_t expected_attention_output_hash(
 
 static int run_attention_probe(const struct attention_profile *profile,
                                struct command_metrics *metrics) {
-  uint32_t expected_head_output[2];
+  int16_t expected_output[2][BONSAI_ATTN_MAX_HEAD_DIM];
   const unsigned int segments = attention_segments(profile->head_dim);
   const unsigned int vector_words = (profile->head_dim + 1u) / 2u;
   const unsigned int input_transactions =
@@ -501,13 +476,10 @@ static int run_attention_probe(const struct attention_profile *profile,
   const uint32_t context = bonsai_accel_attention_context(
       profile->context, profile->append_position);
 
-  if (profile->heads > 2u) return 0;
+  if (profile->heads > 2u || profile->context > 2u) return 0;
   for (unsigned int head = 0; head < profile->heads; ++head) {
-    expected_head_output[head] =
-        expected_attention_head_checksum(profile, head) ^
-        expected_attention_score_checksum(profile, head) ^
-        expected_attention_normalization_checksum(profile, head) ^
-        ((uint32_t)head << 24);
+    if (!build_attention_reference_output(
+            profile, head, expected_output[head])) return 0;
   }
 
   bonsai_accel_write(BONSAI_REG_ATTN_HEADS_DIM, heads_dim);
@@ -566,8 +538,11 @@ static int run_attention_probe(const struct attention_profile *profile,
         if (tile >= profile->kv_heads * segments) return 0;
         expected = attention_fixture_word(role, tile, output_word);
       } else if (role == BONSAI_ROLE_OUTPUT && head < profile->heads) {
-        expected = expected_head_output[head] ^
-                   ((uint32_t)segment << 16) ^ output_word;
+        const unsigned int element =
+            segment * BONSAI_ATTN_VECTOR_TILE_ELEMENTS + output_word * 2u;
+        expected = (uint16_t)expected_output[head][element] |
+                   ((uint32_t)(uint16_t)expected_output[head][element + 1u]
+                    << 16);
       } else {
         return 0;
       }
@@ -595,7 +570,7 @@ static int run_attention_probe(const struct attention_profile *profile,
                     metrics->active_cycles ==
                         input_words + output_words +
                         3u * profile->heads * profile->context +
-                        profile->heads * vector_words &&
+                        2u * profile->heads * vector_words &&
                     metrics->input_wait_cycles != 0 &&
                     metrics->output_wait_cycles == 0 &&
                     metrics->input_bytes == input_words * sizeof(uint32_t) &&
