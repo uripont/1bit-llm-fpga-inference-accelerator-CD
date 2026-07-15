@@ -26,9 +26,9 @@ SUCCESS_PATTERN=evaluation_status=PASS \
 /workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_debug_auth.vhd:67:3:@0ms:(assertion warning): [NEORV32] Using DEFAULT on-chip debugger authenticator. Replace by custom module.
 /workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_top.vhd:384:5:@0ms:(assertion note): [NEORV32] The NEORV32 RISC-V Processor (v01.13.02.00), github.com/stnolting/neorv32
 /workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_top.vhd:393:5:@0ms:(assertion note): [NEORV32] Processor Configuration: CPU (single-core) IMEM-ROM DMEM I-CACHE D-CACHE XBUS CLINT GPIO UART0 UART1 SPI SDI TWI TWD PWM WDT TRNG CFS NEOLED GPTMR ONEWIRE DMA SLINK SYSINFO TRACER OCD OCD-AUTH OCD-HWBP 
+[progress] Proposal B CPU_PUSH bonsai evaluation: 31s elapsed
 /workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_top.vhd:429:5:@0ms:(assertion warning): [NEORV32] Assuming this is a simulation.
 /workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_top.vhd:441:5:@0ms:(assertion note): [NEORV32] BOOT_MODE_SELECT 2 - booting IMEM image
-[progress] Proposal B CPU_PUSH bonsai evaluation: 31s elapsed
 kernel=attention_kv_engine
 backend=hardware_neorv32_cfs
 transfer_mode=cpu_push
@@ -53,15 +53,11 @@ output_wait_cycles=0
 control_cycles=1594
 frontend_input_wait=2403
 frontend_output_wait=4289
-[progress] Proposal B CPU_PUSH bonsai evaluation: 61s elapsed
 input_bytes=256
+[progress] Proposal B CPU_PUSH bonsai evaluation: 61s elapsed
 output_bytes=128
 work_mac=128
 checksum=7569
 expected_checksum=7569
 evaluation_status=PASS
-[progress] Proposal B CPU_PUSH bonsai evaluation: 92s elapsed
-[progress] Proposal B CPU_PUSH bonsai evaluation: 122s elapsed
-[progress] Proposal B CPU_PUSH bonsai evaluation: 152s elapsed
-/usr/bin/ghdl-mcode:info: simulation stopped by --stop-time @8ms
 [pass] CFS firmware success marker: evaluation_status=PASS

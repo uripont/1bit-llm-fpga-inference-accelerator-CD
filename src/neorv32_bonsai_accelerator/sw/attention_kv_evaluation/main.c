@@ -117,6 +117,7 @@ static void prepare_payloads(void) {
   }
 }
 
+#ifndef EVALUATE_MEM_STREAM
 static const uint32_t *payload_for(unsigned int role, unsigned int tile) {
   switch (role) {
     case BONSAI_ROLE_QUERY:
@@ -138,6 +139,7 @@ static const uint32_t *payload_for(unsigned int role, unsigned int tile) {
       return 0;
   }
 }
+#endif
 
 static void read_metrics(struct command_metrics *metrics) {
   metrics->command_cycles = bonsai_accel_read(BONSAI_REG_COUNTER_COMMAND);
@@ -153,6 +155,7 @@ static void read_metrics(struct command_metrics *metrics) {
   metrics->work = bonsai_accel_read(BONSAI_REG_COUNTER_WORK);
 }
 
+#ifndef EVALUATE_MEM_STREAM
 static int wait_output_word(void) {
   for (uint32_t poll = 0; poll < POLL_LIMIT; ++poll) {
     if ((bonsai_accel_read(BONSAI_REG_FIFO_STATUS) &
@@ -250,6 +253,139 @@ static int run_command(struct command_metrics *metrics,
   bonsai_accel_write(BONSAI_REG_COMMAND, BONSAI_COMMAND_ACK);
   return bonsai_accel_read(BONSAI_REG_STATUS) == 0;
 }
+#else
+
+#define TILE_STRIDE_BYTES (TILE_WORD_CAPACITY * sizeof(uint32_t))
+#define QUERY_BASE_WORD 0u
+#define CURRENT_K_BASE_WORD 1024u
+#define CURRENT_V_BASE_WORD 2048u
+#define K_CACHE_BASE_WORD 3072u
+#define V_CACHE_BASE_WORD 6144u
+#define OUTPUT_BASE_WORD 9216u
+
+static int reject_missing_descriptors(void) {
+  bonsai_accel_write(BONSAI_REG_ATTN_HEADS_DIM,
+      bonsai_accel_attention_heads_dim(
+          ATTENTION_HEADS, ATTENTION_KV_HEADS, ATTENTION_HEAD_DIM));
+  bonsai_accel_write(BONSAI_REG_ATTN_CONTEXT,
+      bonsai_accel_attention_context(ATTENTION_CTX, APPEND_POSITION));
+  bonsai_accel_write(BONSAI_REG_CONFIG,
+      bonsai_accel_config(BONSAI_SERVICE_ATTN_KV, BONSAI_TRANSFER_MEM_STREAM));
+  bonsai_accel_write(BONSAI_REG_COMMAND, BONSAI_COMMAND_START);
+  for (uint32_t poll = 0; poll < POLL_LIMIT; ++poll) {
+    const uint32_t status = bonsai_accel_read(BONSAI_REG_STATUS);
+    if ((status & TERMINAL_MASK) != 0) {
+      if ((status & BONSAI_STATUS_ERROR) == 0 ||
+          bonsai_accel_status_error(status) != BONSAI_ERROR_BAD_COMMAND) return 0;
+      bonsai_accel_write(BONSAI_REG_COMMAND, BONSAI_COMMAND_ACK);
+      return bonsai_accel_read(BONSAI_REG_STATUS) == 0;
+    }
+  }
+  return 0;
+}
+
+static void copy_tiles_to_memory(unsigned int base_word,
+                                 const uint32_t *source,
+                                 unsigned int tile_count) {
+  volatile uint32_t *memory = bonsai_accel_memory_window();
+  for (unsigned int tile = 0; tile < tile_count; ++tile) {
+    for (unsigned int word = 0; word < TILE_WORD_CAPACITY; ++word) {
+      memory[base_word + tile * TILE_WORD_CAPACITY + word] =
+          source[payload_offset(tile, word)];
+    }
+  }
+}
+
+static void prepare_memory_descriptors(void) {
+  const unsigned int query_tiles = ATTENTION_HEADS * SEGMENTS;
+  const unsigned int current_tiles = ATTENTION_KV_HEADS * SEGMENTS;
+  const unsigned int cache_tiles = ATTENTION_KV_HEADS * ATTENTION_CTX * SEGMENTS;
+  copy_tiles_to_memory(QUERY_BASE_WORD, query_payload, query_tiles);
+  copy_tiles_to_memory(CURRENT_K_BASE_WORD, current_k_payload, current_tiles);
+  copy_tiles_to_memory(CURRENT_V_BASE_WORD, current_v_payload, current_tiles);
+  copy_tiles_to_memory(K_CACHE_BASE_WORD, k_cache_payload, cache_tiles);
+  copy_tiles_to_memory(V_CACHE_BASE_WORD, v_cache_payload, cache_tiles);
+
+  bonsai_accel_write_descriptor(BONSAI_ROLE_QUERY, query_tiles,
+      QUERY_BASE_WORD * sizeof(uint32_t), TILE_STRIDE_BYTES);
+  bonsai_accel_write_descriptor(BONSAI_ROLE_CURRENT_K, current_tiles,
+      CURRENT_K_BASE_WORD * sizeof(uint32_t), TILE_STRIDE_BYTES);
+  bonsai_accel_write_descriptor(BONSAI_ROLE_CURRENT_V, current_tiles,
+      CURRENT_V_BASE_WORD * sizeof(uint32_t), TILE_STRIDE_BYTES);
+  bonsai_accel_write_descriptor(BONSAI_ROLE_K_CACHE, cache_tiles,
+      K_CACHE_BASE_WORD * sizeof(uint32_t), TILE_STRIDE_BYTES);
+  bonsai_accel_write_descriptor(BONSAI_ROLE_V_CACHE, cache_tiles,
+      V_CACHE_BASE_WORD * sizeof(uint32_t), TILE_STRIDE_BYTES);
+  bonsai_accel_write_descriptor(BONSAI_ROLE_OUTPUT, query_tiles,
+      OUTPUT_BASE_WORD * sizeof(uint32_t), TILE_STRIDE_BYTES);
+}
+
+static int collect_memory_outputs(void) {
+  volatile uint32_t *memory = bonsai_accel_memory_window();
+  for (unsigned int head = 0; head < ATTENTION_HEADS; ++head) {
+    for (unsigned int segment = 0; segment < SEGMENTS; ++segment) {
+      const unsigned int tile = head * SEGMENTS + segment;
+      for (unsigned int word = 0; word < words_for_segment(segment); ++word) {
+        const uint32_t packed =
+            memory[OUTPUT_BASE_WORD + tile * TILE_WORD_CAPACITY + word];
+        const unsigned int element = segment * TILE_ELEMENTS + word * 2u;
+        actual[head * ATTENTION_HEAD_DIM + element] = (int16_t)packed;
+        actual[head * ATTENTION_HEAD_DIM + element + 1u] = (int16_t)(packed >> 16);
+      }
+    }
+  }
+
+  for (unsigned int kv_head = 0; kv_head < ATTENTION_KV_HEADS; ++kv_head) {
+    for (unsigned int segment = 0; segment < SEGMENTS; ++segment) {
+      const unsigned int current_tile = kv_head * SEGMENTS + segment;
+      const unsigned int cache_tile =
+          (kv_head * ATTENTION_CTX + APPEND_POSITION) * SEGMENTS + segment;
+      for (unsigned int word = 0; word < words_for_segment(segment); ++word) {
+        if (memory[K_CACHE_BASE_WORD + cache_tile * TILE_WORD_CAPACITY + word] !=
+                current_k_payload[payload_offset(current_tile, word)] ||
+            memory[V_CACHE_BASE_WORD + cache_tile * TILE_WORD_CAPACITY + word] !=
+                current_v_payload[payload_offset(current_tile, word)]) return 0;
+      }
+    }
+  }
+  return 1;
+}
+
+static int run_command(struct command_metrics *metrics,
+                       unsigned int *input_transactions,
+                       unsigned int *output_transactions) {
+  uint32_t terminal_status = UINT32_MAX;
+  prepare_memory_descriptors();
+  bonsai_accel_write(BONSAI_REG_ATTN_HEADS_DIM,
+      bonsai_accel_attention_heads_dim(
+          ATTENTION_HEADS, ATTENTION_KV_HEADS, ATTENTION_HEAD_DIM));
+  bonsai_accel_write(BONSAI_REG_ATTN_CONTEXT,
+      bonsai_accel_attention_context(ATTENTION_CTX, APPEND_POSITION));
+  bonsai_accel_write(BONSAI_REG_CONFIG,
+      bonsai_accel_config(BONSAI_SERVICE_ATTN_KV, BONSAI_TRANSFER_MEM_STREAM));
+  bonsai_accel_write(BONSAI_REG_COMMAND, BONSAI_COMMAND_START);
+
+  for (uint32_t poll = 0; poll < POLL_LIMIT; ++poll) {
+    const uint32_t status = bonsai_accel_read(BONSAI_REG_STATUS);
+    if ((status & TERMINAL_MASK) != 0) {
+      terminal_status = status;
+      break;
+    }
+  }
+  if (terminal_status == UINT32_MAX ||
+      (terminal_status & BONSAI_STATUS_DONE) == 0 ||
+      (terminal_status & BONSAI_STATUS_ERROR) != 0) return 0;
+  read_metrics(metrics);
+  *input_transactions =
+      (2u * ATTENTION_KV_HEADS +
+       ATTENTION_HEADS * (1u + 2u * (ATTENTION_CTX - 1u))) * SEGMENTS;
+  *output_transactions =
+      (2u * ATTENTION_KV_HEADS + ATTENTION_HEADS) * SEGMENTS;
+  if (!collect_memory_outputs()) return 0;
+  bonsai_accel_write(BONSAI_REG_COMMAND, BONSAI_COMMAND_ACK);
+  return bonsai_accel_read(BONSAI_REG_STATUS) == 0;
+}
+#endif
 
 static int32_t checksum_i16(const int16_t *values, unsigned int count) {
   int32_t checksum = 0;
@@ -286,6 +422,12 @@ int main(void) {
     return 1;
   }
   prepare_payloads();
+#ifdef EVALUATE_MEM_STREAM
+  if (!reject_missing_descriptors()) {
+    neorv32_uart0_printf("evaluation_status=FAIL_DESCRIPTOR_REJECT\n");
+    return 1;
+  }
+#endif
   if (!run_command(&metrics, &input_transactions, &output_transactions)) {
     neorv32_uart0_printf("evaluation_status=FAIL_COMMAND\n");
     return 1;
@@ -310,8 +452,13 @@ int main(void) {
 
   neorv32_uart0_printf("kernel=attention_kv_engine\n");
   neorv32_uart0_printf("backend=hardware_neorv32_cfs\n");
+#ifdef EVALUATE_MEM_STREAM
+  neorv32_uart0_printf("transfer_mode=mem_stream\n");
+  neorv32_uart0_printf("memory_strategy=descriptor_tile_stream\n");
+#else
   neorv32_uart0_printf("transfer_mode=cpu_push\n");
   neorv32_uart0_printf("cpu_push_strategy=tile_burst_prepacked\n");
+#endif
   neorv32_uart0_printf("input_source=synthetic_q8\n");
   neorv32_uart0_printf("normalization_mode=stable_softmax_fixed_q16\n");
   neorv32_uart0_printf("heads=%u\n", (uint32_t)ATTENTION_HEADS);

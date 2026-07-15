@@ -57,7 +57,4 @@ work_groups=1
 checksum=137
 expected_checksum=137
 evaluation_status=PASS
-[progress] Proposal A board evaluation: 61s elapsed
-[progress] Proposal A board evaluation: 91s elapsed
-/usr/bin/ghdl-mcode:info: simulation stopped by --stop-time @5ms
 [pass] CFS firmware success marker: evaluation_status=PASS

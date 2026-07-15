@@ -52,7 +52,9 @@ begin
   command_valid <= '1' when
     ((selected_service = SERVICE_Q1_MATVEC_C) or
      (selected_service = SERVICE_ATTN_KV_C)) and
-    (selected_transfer = TRANSFER_CPU_PUSH_C) and
+    ((selected_transfer = TRANSFER_CPU_PUSH_C) or
+     ((selected_transfer = TRANSFER_MEM_STREAM_C) and
+      (selected_service = SERVICE_ATTN_KV_C))) and
     (service_config_valid_i = '1')
     else '0';
 
@@ -92,7 +94,8 @@ begin
              (selected_service /= SERVICE_ATTN_KV_C) then
             error_code <= ERROR_BAD_COMMAND_C;
             state      <= ERROR;
-          elsif selected_transfer /= TRANSFER_CPU_PUSH_C then
+          elsif (selected_transfer = TRANSFER_MEM_STREAM_C) and
+                (selected_service /= SERVICE_ATTN_KV_C) then
             error_code <= ERROR_UNSUPPORTED_MODE_C;
             state      <= ERROR;
           elsif service_config_valid_i = '0' then

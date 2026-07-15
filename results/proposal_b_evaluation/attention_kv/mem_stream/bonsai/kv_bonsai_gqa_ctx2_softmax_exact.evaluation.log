@@ -4,11 +4,11 @@
       |  ^~~~~~~
 Memory utilization:
    text	   data	    bss	    dec	    hex	filename
-   5472	      0	    512	   5984	   1760	main.elf
+   5676	      0	    576	   6252	   186c	main.elf
 Compiling image generator...
 Generating neorv32_imem_image.vhd
-Executable (VHD): 5472 bytes
-IMEM_SIZE=16384 DMEM_SIZE=8192 STOP_TIME=8ms \
+Executable (VHD): 5676 bytes
+IMEM_SIZE=262144 DMEM_SIZE=131072 STOP_TIME=15ms \
 SUCCESS_PATTERN=evaluation_status=PASS \
 ../../sim/run-ghdl.sh "/workspaces/1bit-llm-fpga-inference-accelerator-CD/src/neorv32_bonsai_accelerator/sw/attention_kv_evaluation/neorv32_imem_image.vhd"
 [1/3] Importing NEORV32 and Bonsai accelerator RTL
@@ -19,45 +19,45 @@ SUCCESS_PATTERN=evaluation_status=PASS \
 /workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_cache_ram.vhd:47:3:@0ms:(assertion note): [NEORV32] Using default CACHE RAM component.
 /workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_cache_ram.vhd:47:3:@0ms:(assertion note): [NEORV32] Using default CACHE RAM component.
 /workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_imem_rom.vhd:42:3:@0ms:(assertion note): [NEORV32] Using default IMEM ROM component (8192 bytes).
-/workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_dmem_ram.vhd:40:3:@0ms:(assertion note): [NEORV32] Using default DMEM RAM component (8192 bytes).
+/workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_dmem_ram.vhd:40:3:@0ms:(assertion note): [NEORV32] Using default DMEM RAM component (131072 bytes).
 /workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_trng.vhd:303:3:@0ms:(assertion note): [neoTRNG] The neoTRNG (v3.4) - A Tiny and Platform-Independent True Random Number Generator, github.com/stnolting/neoTRNG
 /workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_trng.vhd:313:3:@0ms:(assertion warning): [neoTRNG] Simulation-mode enabled (NO TRUE/PHYSICAL RANDOM)!
 /workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_tracer.vhd:254:5:@0ms:(assertion note): [NEORV32] CPU 0 trace logging enabled -> neorv32.tracer0.log
 /workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_debug_auth.vhd:67:3:@0ms:(assertion warning): [NEORV32] Using DEFAULT on-chip debugger authenticator. Replace by custom module.
 /workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_top.vhd:384:5:@0ms:(assertion note): [NEORV32] The NEORV32 RISC-V Processor (v01.13.02.00), github.com/stnolting/neorv32
 /workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_top.vhd:393:5:@0ms:(assertion note): [NEORV32] Processor Configuration: CPU (single-core) IMEM-ROM DMEM I-CACHE D-CACHE XBUS CLINT GPIO UART0 UART1 SPI SDI TWI TWD PWM WDT TRNG CFS NEOLED GPTMR ONEWIRE DMA SLINK SYSINFO TRACER OCD OCD-AUTH OCD-HWBP 
-[progress] Proposal B CPU_PUSH board evaluation: 30s elapsed
+[progress] Proposal B MEM_STREAM bonsai evaluation: 31s elapsed
 /workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_top.vhd:429:5:@0ms:(assertion warning): [NEORV32] Assuming this is a simulation.
 /workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_top.vhd:441:5:@0ms:(assertion note): [NEORV32] BOOT_MODE_SELECT 2 - booting IMEM image
 kernel=attention_kv_engine
 backend=hardware_neorv32_cfs
-transfer_mode=cpu_push
-cpu_push_strategy=tile_burst_prepacked
+transfer_mode=mem_stream
+memory_strategy=descriptor_tile_stream
 input_source=synthetic_q8
 normalization_mode=stable_softmax_fixed_q16
-heads=1
+heads=2
 kv_heads=1
-head_dim=32
+head_dim=16
 ctx=2
 append_position=1
 score_mac=64
 value_mac=64
-softmax_elements=2
-input_transactions=5
-output_transactions=3
-command_cycles=5344
-engine_cycles=4383
-active_cycles=166
-input_wait_cycles=4204
+softmax_elements=4
+input_transactions=8
+output_transactions=4
+command_cycles=290
+engine_cycles=280
+active_cycles=140
+input_wait_cycles=96
 output_wait_cycles=0
-control_cycles=13
-frontend_input_wait=4119
-frontend_output_wait=2598
-[progress] Proposal B CPU_PUSH board evaluation: 61s elapsed
-input_bytes=320
-output_bytes=192
+control_cycles=44
+frontend_input_wait=32
+frontend_output_wait=32
+input_bytes=256
+[progress] Proposal B MEM_STREAM bonsai evaluation: 61s elapsed
+output_bytes=128
 work_mac=128
-checksum=5274
-expected_checksum=5274
+checksum=7569
+expected_checksum=7569
 evaluation_status=PASS
 [pass] CFS firmware success marker: evaluation_status=PASS

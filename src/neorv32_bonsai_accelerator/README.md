@@ -113,3 +113,27 @@ therefore complete under `CPU_PUSH`, but utilization remains 3.787% for board
 and 3.326% for GQA because the engine spends most elapsed cycles waiting for
 CPU-provided input. These results establish the straightforward hardware
 baseline for the subsequent `MEM_STREAM` implementation.
+
+## Evaluate Proposal B MEM_STREAM
+
+`MEM_STREAM` uses role-indexed descriptors to move Q/K/V and output tiles
+between backing memory and the same attention engine. The simulation memory
+aperture is loaded before command timing and represents the board PSRAM
+controller boundary.
+
+```sh
+python3 src/neorv32_bonsai_accelerator/evaluate-attention-kv-mem-stream.py
+```
+
+Results are written under
+`results/proposal_b_evaluation/attention_kv/mem_stream/` and include direct
+command-cycle and frontend-wait comparisons with CPU push.
+
+| Profile | `CPU_PUSH` command | `MEM_STREAM` command | Frontend speedup | Input-wait reduction | Output-wait reduction |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Board, H1/KVH1/D32/C2 | 5,344 | 328 | 16.293x | 99.514% | 98.152% |
+| Bonsai GQA, H2/KVH1/D16/C2 | 4,756 | 290 | 16.400x | 98.668% | 99.254% |
+
+Both profiles preserve the CPU-push checksum, traffic volume, and useful-work
+count. These figures use the always-ready simulation backing-memory model;
+physical PSRAM latency and controller behavior belong to board integration.

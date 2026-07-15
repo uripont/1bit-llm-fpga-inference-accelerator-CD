@@ -28,6 +28,17 @@ entity cfs_reg_file is
     attn_context_length_o  : out std_ulogic_vector(15 downto 0);
     attn_append_position_o : out std_ulogic_vector(15 downto 0);
 
+    descriptor_role_i   : in  tile_role_t;
+    descriptor_length_o : out std_ulogic_vector(31 downto 0);
+    descriptor_base_o   : out std_ulogic_vector(31 downto 0);
+    descriptor_stride_o : out std_ulogic_vector(31 downto 0);
+    descriptor_valid_o  : out std_ulogic;
+    descriptor_valid_mask_o : out std_ulogic_vector(DESCRIPTOR_COUNT_C - 1 downto 0);
+    memory_cpu_write_o   : out std_ulogic;
+    memory_cpu_address_o : out std_ulogic_vector(13 downto 0);
+    memory_cpu_data_o    : out std_ulogic_vector(31 downto 0);
+    memory_cpu_data_i    : in  std_ulogic_vector(31 downto 0);
+
     busy_i          : in std_ulogic;
     done_i          : in std_ulogic;
     error_i         : in std_ulogic;
@@ -70,6 +81,11 @@ architecture rtl of cfs_reg_file is
 
   signal config_reg, matvec_shape_reg : std_ulogic_vector(31 downto 0);
   signal attn_heads_dim_reg, attn_context_reg : std_ulogic_vector(31 downto 0);
+  type descriptor_array_t is array (0 to DESCRIPTOR_COUNT_C - 1) of
+    std_ulogic_vector(31 downto 0);
+  signal descriptor_length, descriptor_base, descriptor_stride : descriptor_array_t;
+  signal descriptor_select : natural range 0 to DESCRIPTOR_COUNT_C - 1;
+  signal descriptor_valid_mask : std_ulogic_vector(DESCRIPTOR_COUNT_C - 1 downto 0);
 
 begin
 
@@ -86,6 +102,43 @@ begin
   attn_append_position_o <=
     attn_context_reg(ATTN_APPEND_POSITION_MSB_C downto ATTN_APPEND_POSITION_LSB_C);
 
+  descriptor_lookup : process(all)
+    variable role_v : natural range 0 to DESCRIPTOR_COUNT_C - 1;
+  begin
+    role_v := to_integer(unsigned(descriptor_role_i));
+    descriptor_length_o <= descriptor_length(role_v);
+    descriptor_base_o <= descriptor_base(role_v);
+    descriptor_stride_o <= descriptor_stride(role_v);
+    descriptor_valid_o <= descriptor_valid_mask(role_v);
+  end process descriptor_lookup;
+  descriptor_valid_mask_o <= descriptor_valid_mask;
+
+  descriptor_validation : process(all)
+  begin
+    for i in 0 to DESCRIPTOR_COUNT_C - 1 loop
+      if (unsigned(descriptor_length(i)) /= 0) and
+         (unsigned(descriptor_stride(i)) /= 0) and
+         (descriptor_base(i)(1 downto 0) = "00") and
+         (descriptor_stride(i)(1 downto 0) = "00") then
+        descriptor_valid_mask(i) <= '1';
+      else
+        descriptor_valid_mask(i) <= '0';
+      end if;
+    end loop;
+  end process descriptor_validation;
+
+  memory_address : process(all)
+    variable word_addr_v : natural range 0 to 16383;
+  begin
+    word_addr_v := to_integer(unsigned(bus_req_i.addr(15 downto 2)));
+    memory_cpu_address_o <= (others => '0');
+    if word_addr_v >= MEM_WINDOW_BASE_WORD_C then
+      memory_cpu_address_o <= std_ulogic_vector(
+        to_unsigned(word_addr_v - MEM_WINDOW_BASE_WORD_C, 14));
+    end if;
+  end process memory_address;
+  memory_cpu_data_o <= bus_req_i.data;
+
   bus_access : process(rstn_i, clk_i)
     variable word_addr_v : natural range 0 to 16383;
     variable status_v    : std_ulogic_vector(31 downto 0);
@@ -99,17 +152,25 @@ begin
       matvec_shape_reg <= (others => '0');
       attn_heads_dim_reg <= (others => '0');
       attn_context_reg <= (others => '0');
+      descriptor_select <= 0;
+      for i in 0 to DESCRIPTOR_COUNT_C - 1 loop
+        descriptor_length(i) <= (others => '0');
+        descriptor_base(i) <= (others => '0');
+        descriptor_stride(i) <= (others => '0');
+      end loop;
       start_o      <= '0';
       acknowledge_o <= '0';
       fifo_input_write_o <= '0';
       fifo_input_data_o  <= (others => '0');
       fifo_output_read_o <= '0';
+      memory_cpu_write_o <= '0';
       bus_rsp_o    <= rsp_terminate_c;
     elsif rising_edge(clk_i) then
       start_o        <= '0';
       acknowledge_o  <= '0';
       fifo_input_write_o <= '0';
       fifo_output_read_o <= '0';
+      memory_cpu_write_o <= '0';
       bus_rsp_o.ack   <= bus_req_i.stb;
       bus_rsp_o.err   <= '0';
       bus_rsp_o.data  <= (others => '0');
@@ -144,11 +205,32 @@ begin
                 if busy_i = '0' then
                   attn_context_reg <= bus_req_i.data;
                 end if;
+              when REG_DESC_SELECT_C =>
+                if (busy_i = '0') and
+                   (unsigned(bus_req_i.data) < DESCRIPTOR_COUNT_C) then
+                  descriptor_select <= to_integer(unsigned(bus_req_i.data(3 downto 0)));
+                end if;
+              when REG_DESC_LENGTH_C =>
+                if busy_i = '0' then
+                  descriptor_length(descriptor_select) <= bus_req_i.data;
+                end if;
+              when REG_DESC_BASE_C =>
+                if busy_i = '0' then
+                  descriptor_base(descriptor_select) <= bus_req_i.data;
+                end if;
+              when REG_DESC_STRIDE_C =>
+                if busy_i = '0' then
+                  descriptor_stride(descriptor_select) <= bus_req_i.data;
+                end if;
               when REG_FIFO_IN_C =>
                 fifo_input_data_o  <= bus_req_i.data;
                 fifo_input_write_o <= '1';
               when others =>
-                null;
+                if (word_addr_v >= MEM_WINDOW_BASE_WORD_C) and
+                   (word_addr_v < MEM_WINDOW_BASE_WORD_C + MEM_WINDOW_WORDS_C) and
+                   (busy_i = '0') then
+                  memory_cpu_write_o <= '1';
+                end if;
             end case;
           end if;
         else
@@ -174,6 +256,14 @@ begin
               bus_rsp_o.data <= attn_heads_dim_reg;
             when REG_ATTN_CONTEXT_C =>
               bus_rsp_o.data <= attn_context_reg;
+            when REG_DESC_SELECT_C =>
+              bus_rsp_o.data <= std_ulogic_vector(to_unsigned(descriptor_select, 32));
+            when REG_DESC_LENGTH_C =>
+              bus_rsp_o.data <= descriptor_length(descriptor_select);
+            when REG_DESC_BASE_C =>
+              bus_rsp_o.data <= descriptor_base(descriptor_select);
+            when REG_DESC_STRIDE_C =>
+              bus_rsp_o.data <= descriptor_stride(descriptor_select);
             when REG_REQUEST_C =>
               request_v := (others => '0');
               request_v(REQUEST_INPUT_VALID_BIT_C) := input_request_valid_i;
@@ -224,7 +314,12 @@ begin
             when REG_COUNTER_WORK_C =>
               bus_rsp_o.data <= counter_work_i;
             when others =>
-              bus_rsp_o.data <= (others => '0');
+              if (word_addr_v >= MEM_WINDOW_BASE_WORD_C) and
+                 (word_addr_v < MEM_WINDOW_BASE_WORD_C + MEM_WINDOW_WORDS_C) then
+                bus_rsp_o.data <= memory_cpu_data_i;
+              else
+                bus_rsp_o.data <= (others => '0');
+              end if;
           end case;
         end if;
       end if;

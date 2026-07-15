@@ -49,12 +49,12 @@ dot_elements=2048
 q1_groups=16
 activation_q8_blocks=64
 physical_q8_block_transfers=64
-[progress] Proposal A bonsai evaluation: 241s elapsed
 command_cycles=27841
 engine_cycles=27730
 active_cycles=849
 input_wait_cycles=26800
 output_wait_cycles=0
+[progress] Proposal A bonsai evaluation: 241s elapsed
 control_cycles=81
 frontend_input_wait=26064
 frontend_output_wait=107
@@ -64,6 +64,4 @@ work_groups=16
 checksum=-27
 expected_checksum=-27
 evaluation_status=PASS
-[progress] Proposal A bonsai evaluation: 272s elapsed
-/usr/bin/ghdl-mcode:info: simulation stopped by --stop-time @10ms
 [pass] CFS firmware success marker: evaluation_status=PASS

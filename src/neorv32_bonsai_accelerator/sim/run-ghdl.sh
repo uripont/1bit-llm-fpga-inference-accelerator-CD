@@ -37,6 +37,8 @@ done < <(find "${NEORV32_ROOT}/rtl/core" -type f -name '*.vhd' \
   "${RTL_DIR}/local_buffer_bank.vhd" \
   "${RTL_DIR}/frontend_control.vhd" \
   "${RTL_DIR}/stream_frontend.vhd" \
+  "${RTL_DIR}/stream_memory.vhd" \
+  "${RTL_DIR}/memory_streamer.vhd" \
   "${RTL_DIR}/q1_matvec_engine.vhd" \
   "${RTL_DIR}/attn_kv_engine.vhd" \
   "${RTL_DIR}/neorv32_cfs.vhd" \
@@ -54,6 +56,7 @@ echo "[3/3] Running the CFS firmware"
 cd "${NEORV32_ROOT}/sim"
 : > tb.uart0_rx.log
 SIM_LOG="${BUILD_DIR}/shell-probe.log"
+set +e
 "${GHDL}" -r --std=08 --work=neorv32 --workdir="${BUILD_DIR}" neorv32_tb \
   -gJTAG_TESTS_EN=false \
   -gDUAL_CORE_EN=false \
@@ -62,7 +65,30 @@ SIM_LOG="${BUILD_DIR}/shell-probe.log"
   --max-stack-alloc=0 \
   --ieee-asserts=disable \
   --assert-level=error \
-  --stop-time="${STOP_TIME}" | tee "${SIM_LOG}"
+  --stop-time="${STOP_TIME}" > >(tee "${SIM_LOG}") 2>&1 &
+SIM_PID=$!
+SIM_STATUS=0
+while kill -0 "${SIM_PID}" 2>/dev/null; do
+  if grep -q "^${SUCCESS_PATTERN}$" "${SIM_LOG}"; then
+    kill "${SIM_PID}" 2>/dev/null
+    wait "${SIM_PID}" 2>/dev/null
+    SIM_STATUS=0
+    break
+  fi
+  sleep 0.2
+done
+if kill -0 "${SIM_PID}" 2>/dev/null; then
+  wait "${SIM_PID}"
+  SIM_STATUS=$?
+elif ! grep -q "^${SUCCESS_PATTERN}$" "${SIM_LOG}"; then
+  wait "${SIM_PID}"
+  SIM_STATUS=$?
+fi
+set -e
+
+if [[ ${SIM_STATUS} -ne 0 ]]; then
+  exit "${SIM_STATUS}"
+fi
 
 grep -q "^${SUCCESS_PATTERN}$" "${SIM_LOG}"
 echo "[pass] CFS firmware success marker: ${SUCCESS_PATTERN}"

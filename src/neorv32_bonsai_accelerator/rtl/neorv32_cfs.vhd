@@ -78,6 +78,22 @@ architecture bonsai_accel_rtl of neorv32_cfs is
   signal stream_input_valid, stream_input_ready : std_ulogic;
   signal stream_output_valid, stream_output_ready : std_ulogic;
   signal stream_input_data, stream_output_data : std_ulogic_vector(31 downto 0);
+  signal cpu_transaction_valid, cpu_transaction_ready, cpu_input_valid, cpu_output_ready : std_ulogic;
+  signal cpu_input_data : std_ulogic_vector(31 downto 0);
+  signal cpu_idle, cpu_error, cpu_input_wait, cpu_output_wait : std_ulogic;
+  signal cpu_input_bytes, cpu_output_bytes : std_ulogic_vector(31 downto 0);
+  signal mem_transaction_valid, mem_transaction_ready, mem_input_valid, mem_output_ready : std_ulogic;
+  signal mem_input_data : std_ulogic_vector(31 downto 0);
+  signal mem_idle, mem_error, mem_input_wait, mem_output_wait : std_ulogic;
+  signal mem_input_bytes, mem_output_bytes : std_ulogic_vector(31 downto 0);
+  signal descriptor_role : tile_role_t;
+  signal descriptor_length, descriptor_base, descriptor_stride : std_ulogic_vector(31 downto 0);
+  signal descriptor_valid : std_ulogic;
+  signal descriptor_valid_mask : std_ulogic_vector(DESCRIPTOR_COUNT_C - 1 downto 0);
+  signal memory_cpu_write, memory_stream_write, memory_ready, memory_error : std_ulogic;
+  signal memory_cpu_address, memory_stream_address : std_ulogic_vector(13 downto 0);
+  signal memory_cpu_write_data, memory_cpu_read_data : std_ulogic_vector(31 downto 0);
+  signal memory_stream_write_data, memory_stream_read_data : std_ulogic_vector(31 downto 0);
 
   signal engine_launch, engine_busy, engine_done, engine_error : std_ulogic;
   signal engine_active, engine_input_wait, engine_output_wait : std_ulogic;
@@ -132,6 +148,15 @@ begin
           service_config_valid <= '0';
         end if;
       end if;
+      if (selected_transfer = TRANSFER_MEM_STREAM_C) and
+         ((descriptor_valid_mask(to_integer(unsigned(ROLE_QUERY_C))) = '0') or
+          (descriptor_valid_mask(to_integer(unsigned(ROLE_CURRENT_K_C))) = '0') or
+          (descriptor_valid_mask(to_integer(unsigned(ROLE_CURRENT_V_C))) = '0') or
+          (descriptor_valid_mask(to_integer(unsigned(ROLE_K_CACHE_C))) = '0') or
+          (descriptor_valid_mask(to_integer(unsigned(ROLE_V_CACHE_C))) = '0') or
+          (descriptor_valid_mask(to_integer(unsigned(ROLE_OUTPUT_C))) = '0')) then
+        service_config_valid <= '0';
+      end if;
     end if;
   end process shape_validation;
 
@@ -176,6 +201,29 @@ begin
   engine_output_wait <= q1_output_wait when selected_service = SERVICE_Q1_MATVEC_C else attn_output_wait;
   engine_work <= q1_work when selected_service = SERVICE_Q1_MATVEC_C else attn_work;
 
+  stream_transaction_ready <= cpu_transaction_ready
+    when selected_transfer = TRANSFER_CPU_PUSH_C else mem_transaction_ready;
+  stream_input_valid <= cpu_input_valid
+    when selected_transfer = TRANSFER_CPU_PUSH_C else mem_input_valid;
+  stream_input_data <= cpu_input_data
+    when selected_transfer = TRANSFER_CPU_PUSH_C else mem_input_data;
+  stream_output_ready <= cpu_output_ready
+    when selected_transfer = TRANSFER_CPU_PUSH_C else mem_output_ready;
+  stream_idle <= cpu_idle when selected_transfer = TRANSFER_CPU_PUSH_C else mem_idle;
+  stream_error <= cpu_error when selected_transfer = TRANSFER_CPU_PUSH_C else mem_error;
+  frontend_input_wait <= cpu_input_wait
+    when selected_transfer = TRANSFER_CPU_PUSH_C else mem_input_wait;
+  frontend_output_wait <= cpu_output_wait
+    when selected_transfer = TRANSFER_CPU_PUSH_C else mem_output_wait;
+  frontend_input_bytes <= cpu_input_bytes
+    when selected_transfer = TRANSFER_CPU_PUSH_C else mem_input_bytes;
+  frontend_output_bytes <= cpu_output_bytes
+    when selected_transfer = TRANSFER_CPU_PUSH_C else mem_output_bytes;
+  cpu_transaction_valid <= stream_transaction_valid
+    when selected_transfer = TRANSFER_CPU_PUSH_C else '0';
+  mem_transaction_valid <= stream_transaction_valid
+    when selected_transfer = TRANSFER_MEM_STREAM_C else '0';
+
   reg_file_inst : entity neorv32.cfs_reg_file
     port map (
       clk_i => clk_i,
@@ -194,6 +242,16 @@ begin
       attn_head_dim_o => config_attn_head_dim,
       attn_context_length_o => config_attn_context_length,
       attn_append_position_o => config_attn_append_position,
+      descriptor_role_i => descriptor_role,
+      descriptor_length_o => descriptor_length,
+      descriptor_base_o => descriptor_base,
+      descriptor_stride_o => descriptor_stride,
+      descriptor_valid_o => descriptor_valid,
+      descriptor_valid_mask_o => descriptor_valid_mask,
+      memory_cpu_write_o => memory_cpu_write,
+      memory_cpu_address_o => memory_cpu_address,
+      memory_cpu_data_o => memory_cpu_write_data,
+      memory_cpu_data_i => memory_cpu_read_data,
       busy_i => status_busy,
       done_i => status_done,
       error_i => status_error,
@@ -301,17 +359,17 @@ begin
       clk_i => clk_i,
       rstn_i => rstn_i,
       command_start_i => command_counter_start,
-      transaction_valid_i => stream_transaction_valid,
-      transaction_ready_o => stream_transaction_ready,
+      transaction_valid_i => cpu_transaction_valid,
+      transaction_ready_o => cpu_transaction_ready,
       transaction_direction_i => stream_transaction_direction,
       transaction_role_i => stream_transaction_role,
       transaction_tile_i => stream_transaction_tile,
       transaction_length_i => stream_transaction_length,
-      engine_input_valid_o => stream_input_valid,
+      engine_input_valid_o => cpu_input_valid,
       engine_input_ready_i => stream_input_ready,
-      engine_input_data_o => stream_input_data,
+      engine_input_data_o => cpu_input_data,
       engine_output_valid_i => stream_output_valid,
-      engine_output_ready_o => stream_output_ready,
+      engine_output_ready_o => cpu_output_ready,
       engine_output_data_i => stream_output_data,
       cpu_input_write_i => fifo_input_write,
       cpu_input_data_i => fifo_input_data,
@@ -329,12 +387,64 @@ begin
       output_request_remaining_o => output_request_remaining,
       input_fifo_level_o => fifo_input_level,
       output_fifo_level_o => fifo_output_level,
-      input_wait_o => frontend_input_wait,
-      output_wait_o => frontend_output_wait,
-      input_bytes_o => frontend_input_bytes,
-      output_bytes_o => frontend_output_bytes,
-      idle_o => stream_idle,
-      error_o => stream_error
+      input_wait_o => cpu_input_wait,
+      output_wait_o => cpu_output_wait,
+      input_bytes_o => cpu_input_bytes,
+      output_bytes_o => cpu_output_bytes,
+      idle_o => cpu_idle,
+      error_o => cpu_error
+    );
+
+  memory_streamer_inst : entity neorv32.memory_streamer
+    port map (
+      clk_i => clk_i, rstn_i => rstn_i, command_start_i => command_counter_start,
+      head_dim_i => config_attn_head_dim,
+      context_length_i => config_attn_context_length,
+      append_position_i => config_attn_append_position,
+      transaction_valid_i => mem_transaction_valid,
+      transaction_ready_o => mem_transaction_ready,
+      transaction_direction_i => stream_transaction_direction,
+      transaction_role_i => stream_transaction_role,
+      transaction_tile_i => stream_transaction_tile,
+      transaction_length_i => stream_transaction_length,
+      engine_input_valid_o => mem_input_valid,
+      engine_input_ready_i => stream_input_ready,
+      engine_input_data_o => mem_input_data,
+      engine_output_valid_i => stream_output_valid,
+      engine_output_ready_o => mem_output_ready,
+      engine_output_data_i => stream_output_data,
+      descriptor_role_o => descriptor_role,
+      descriptor_length_i => descriptor_length,
+      descriptor_base_i => descriptor_base,
+      descriptor_stride_i => descriptor_stride,
+      descriptor_valid_i => descriptor_valid,
+      memory_write_o => memory_stream_write,
+      memory_address_o => memory_stream_address,
+      memory_write_data_o => memory_stream_write_data,
+      memory_read_data_i => memory_stream_read_data,
+      memory_ready_i => memory_ready,
+      memory_error_i => memory_error,
+      input_wait_o => mem_input_wait,
+      output_wait_o => mem_output_wait,
+      input_bytes_o => mem_input_bytes,
+      output_bytes_o => mem_output_bytes,
+      idle_o => mem_idle,
+      error_o => mem_error
+    );
+
+  stream_memory_inst : entity neorv32.stream_memory
+    port map (
+      clk_i => clk_i,
+      cpu_write_i => memory_cpu_write,
+      cpu_address_i => memory_cpu_address,
+      cpu_write_data_i => memory_cpu_write_data,
+      cpu_read_data_o => memory_cpu_read_data,
+      stream_write_i => memory_stream_write,
+      stream_address_i => memory_stream_address,
+      stream_write_data_i => memory_stream_write_data,
+      stream_read_data_o => memory_stream_read_data,
+      stream_ready_o => memory_ready,
+      stream_error_o => memory_error
     );
 
   q1_matvec_engine_inst : entity neorv32.q1_matvec_engine

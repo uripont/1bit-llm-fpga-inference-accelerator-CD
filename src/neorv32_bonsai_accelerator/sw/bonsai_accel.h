@@ -5,7 +5,7 @@
 #include <neorv32.h>
 
 #define BONSAI_ACCEL_ID UINT32_C(0x424e5341)
-#define BONSAI_ACCEL_VERSION UINT32_C(0x00010300)
+#define BONSAI_ACCEL_VERSION UINT32_C(0x00010400)
 
 enum bonsai_accel_register {
   BONSAI_REG_ID = 0,
@@ -142,12 +142,32 @@ enum bonsai_accel_q1_scale_format {
 #define BONSAI_ATTN_MAX_KV_HEADS 8u
 #define BONSAI_ATTN_SCORE_CAPACITY 256u
 
+/* Descriptor length is a tile count. Base and stride are byte-addressed and
+ * must be 32-bit aligned. The memory window models the external backing store
+ * during simulation and is populated before command timing begins. */
+#define BONSAI_DESCRIPTOR_COUNT 16u
+#define BONSAI_MEM_WINDOW_BASE_WORD 256u
+#define BONSAI_MEM_WINDOW_WORDS 16128u
+
 static inline uint32_t bonsai_accel_read(unsigned int reg) {
   return NEORV32_CFS->REG[reg];
 }
 
 static inline void bonsai_accel_write(unsigned int reg, uint32_t value) {
   NEORV32_CFS->REG[reg] = value;
+}
+
+static inline volatile uint32_t *bonsai_accel_memory_window(void) {
+  return ((volatile uint32_t *)NEORV32_CFS) + BONSAI_MEM_WINDOW_BASE_WORD;
+}
+
+static inline void bonsai_accel_write_descriptor(
+    enum bonsai_accel_tile_role role, uint32_t tile_count,
+    uint32_t base_bytes, uint32_t stride_bytes) {
+  bonsai_accel_write(BONSAI_REG_DESC_SELECT, (uint32_t)role);
+  bonsai_accel_write(BONSAI_REG_DESC_LENGTH, tile_count);
+  bonsai_accel_write(BONSAI_REG_DESC_BASE, base_bytes);
+  bonsai_accel_write(BONSAI_REG_DESC_STRIDE, stride_bytes);
 }
 
 static inline uint32_t bonsai_accel_config(enum bonsai_accel_service service,

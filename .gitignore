@@ -37,3 +37,9 @@ results/proposal_b_evaluation/attention_kv/*
 !results/proposal_b_evaluation/attention_kv/cpu_push/board/*
 !results/proposal_b_evaluation/attention_kv/cpu_push/bonsai/
 !results/proposal_b_evaluation/attention_kv/cpu_push/bonsai/*
+!results/proposal_b_evaluation/attention_kv/mem_stream/
+!results/proposal_b_evaluation/attention_kv/mem_stream/*
+!results/proposal_b_evaluation/attention_kv/mem_stream/board/
+!results/proposal_b_evaluation/attention_kv/mem_stream/board/*
+!results/proposal_b_evaluation/attention_kv/mem_stream/bonsai/
+!results/proposal_b_evaluation/attention_kv/mem_stream/bonsai/*

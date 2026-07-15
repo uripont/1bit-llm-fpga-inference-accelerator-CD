@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate Proposal B CPU_PUSH against Tier 3 attention/KV baselines."""
+"""Evaluate a Proposal B frontend against Tier 3 attention/KV baselines."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 ACCEL = ROOT / "src" / "neorv32_bonsai_accelerator"
 FIRMWARE = ACCEL / "sw" / "attention_kv_evaluation"
-RESULTS = ROOT / "results" / "proposal_b_evaluation" / "attention_kv" / "cpu_push"
+RESULTS_ROOT = ROOT / "results" / "proposal_b_evaluation" / "attention_kv"
 CONTAINER_ROOT = Path("/workspaces/1bit-llm-fpga-inference-accelerator-CD")
 CONTAINER_FIRMWARE = (
     CONTAINER_ROOT / "src" / "neorv32_bonsai_accelerator" /
@@ -76,7 +76,7 @@ PROFILES = {
 SUMMARY_FIELDS = [
     "run", "profile", "heads", "kv_heads", "head_dim", "ctx",
     "input_source", "normalization_mode", "transfer_mode",
-    "cpu_push_strategy", "score_mac", "value_mac", "softmax_elements",
+    "cpu_push_strategy", "memory_strategy", "score_mac", "value_mac", "softmax_elements",
     "logical_kv_read_bytes", "logical_kv_write_bytes",
     "logical_kv_total_bytes", "software_append_cycles",
     "software_score_cycles", "software_norm_cycles", "software_value_cycles",
@@ -86,6 +86,9 @@ SUMMARY_FIELDS = [
     "physical_input_bytes", "physical_output_bytes", "input_transactions",
     "output_transactions", "work_mac", "command_speedup", "engine_speedup",
     "active_cycle_speedup", "command_cycle_reduction_percent",
+    "cpu_push_command_cycles", "mem_stream_vs_cpu_push_speedup",
+    "cpu_push_frontend_input_wait", "frontend_input_wait_reduction_percent",
+    "cpu_push_frontend_output_wait", "frontend_output_wait_reduction_percent",
     "engine_utilization_percent", "engine_input_wait_percent",
     "command_cycles_per_mac", "active_cycles_per_mac", "checksum",
     "expected_checksum", "evaluation_status", "simulation_wall_seconds",
@@ -196,7 +199,8 @@ def validate_compatibility(profile: Profile, software: dict[str, str],
 
 
 def make_result(profile: Profile, software: dict[str, str],
-                hardware: dict[str, str], wall_seconds: float) -> dict[str, str]:
+                hardware: dict[str, str], wall_seconds: float,
+                transfer_mode: str, stop_time: str) -> dict[str, str]:
   validate_compatibility(profile, software, hardware)
   sw = int(software["service_cycles"])
   command = int(hardware["command_cycles"])
@@ -228,8 +232,30 @@ def make_result(profile: Profile, software: dict[str, str],
       "command_cycles_per_mac": quotient(command, work),
       "active_cycles_per_mac": quotient(active, work),
       "simulation_wall_seconds": f"{wall_seconds:.3f}",
-      "stop_time": profile.stop_time,
+      "stop_time": stop_time,
   })
+  if transfer_mode == "mem_stream":
+    cpu_summary = RESULTS_ROOT / "cpu_push" / "summary.csv"
+    with cpu_summary.open(newline="", encoding="utf-8") as source:
+      cpu_rows = list(csv.DictReader(source))
+    cpu = next(row for row in cpu_rows if row["profile"] == profile.name)
+    cpu_command = int(cpu["command_cycles"])
+    cpu_frontend_input_wait = int(cpu["frontend_input_wait"])
+    cpu_frontend_output_wait = int(cpu["frontend_output_wait"])
+    mem_frontend_input_wait = int(hardware["frontend_input_wait"])
+    mem_frontend_output_wait = int(hardware["frontend_output_wait"])
+    result.update({
+        "cpu_push_command_cycles": str(cpu_command),
+        "mem_stream_vs_cpu_push_speedup": quotient(cpu_command, command),
+        "cpu_push_frontend_input_wait": str(cpu_frontend_input_wait),
+        "frontend_input_wait_reduction_percent":
+            f"{100.0 * (cpu_frontend_input_wait - mem_frontend_input_wait) / cpu_frontend_input_wait:.3f}"
+            if cpu_frontend_input_wait else "",
+        "cpu_push_frontend_output_wait": str(cpu_frontend_output_wait),
+        "frontend_output_wait_reduction_percent":
+            f"{100.0 * (cpu_frontend_output_wait - mem_frontend_output_wait) / cpu_frontend_output_wait:.3f}"
+            if cpu_frontend_output_wait else "",
+    })
   return result
 
 
@@ -240,14 +266,16 @@ def docker_make(container: str, arguments: list[str]) -> list[str]:
   ]
 
 
-def evaluate_profile(profile: Profile, container: str,
-                     timeout: int) -> dict[str, str]:
-  output_dir = RESULTS / profile.name
+def evaluate_profile(profile: Profile, container: str, timeout: int,
+                     transfer_mode: str) -> dict[str, str]:
+  results = RESULTS_ROOT / transfer_mode
+  output_dir = results / profile.name
   log = output_dir / f"{profile.run}.evaluation.log"
   software = read_tier3(profile)
+  stop_time = "15ms" if transfer_mode == "mem_stream" else profile.stop_time
   run_streamed(
       docker_make(container, ["clean_all"]), ROOT, log, timeout,
-      f"Proposal B CPU_PUSH {profile.name} clean",
+      f"Proposal B {transfer_mode.upper()} {profile.name} clean",
   )
   args = [
       f"ATTENTION_HEADS={profile.heads}",
@@ -259,14 +287,16 @@ def evaluate_profile(profile: Profile, container: str,
       f"DMEM_SIZE={profile.dmem_size}",
       f"ROM_SIZE={profile.rom_size}",
       f"RAM_SIZE={profile.ram_size}",
-      f"STOP_TIME={profile.stop_time}",
+      f"STOP_TIME={stop_time}",
+      f"TRANSFER_MODE={transfer_mode}",
       "attention-sim",
   ]
   output, wall_seconds = run_streamed(
       docker_make(container, args), ROOT, log, timeout,
-      f"Proposal B CPU_PUSH {profile.name} evaluation", append=True,
+      f"Proposal B {transfer_mode.upper()} {profile.name} evaluation", append=True,
   )
-  result = make_result(profile, software, parse_kv(output), wall_seconds)
+  result = make_result(profile, software, parse_kv(output), wall_seconds,
+                       transfer_mode, stop_time)
   output_dir.mkdir(parents=True, exist_ok=True)
   with (output_dir / "result.csv").open("w", newline="", encoding="utf-8") as target:
     writer = csv.DictWriter(target, fieldnames=SUMMARY_FIELDS)
@@ -275,9 +305,10 @@ def evaluate_profile(profile: Profile, container: str,
   return result
 
 
-def write_summary(rows: list[dict[str, str]]) -> Path:
-  RESULTS.mkdir(parents=True, exist_ok=True)
-  path = RESULTS / "summary.csv"
+def write_summary(rows: list[dict[str, str]], transfer_mode: str) -> Path:
+  results = RESULTS_ROOT / transfer_mode
+  results.mkdir(parents=True, exist_ok=True)
+  path = results / "summary.csv"
   with path.open("w", newline="", encoding="utf-8") as target:
     writer = csv.DictWriter(target, fieldnames=SUMMARY_FIELDS)
     writer.writeheader()
@@ -287,7 +318,7 @@ def write_summary(rows: list[dict[str, str]]) -> Path:
 
 def main() -> int:
   parser = argparse.ArgumentParser(
-      description="Evaluate Proposal B CPU_PUSH against Tier 3 attention cycles."
+      description="Evaluate a Proposal B frontend against Tier 3 attention cycles."
   )
   parser.add_argument(
       "--profiles", default="board,bonsai",
@@ -295,6 +326,8 @@ def main() -> int:
   )
   parser.add_argument("--container", default="1bit-llm-fpga-dev")
   parser.add_argument("--timeout", type=int, default=1200)
+  parser.add_argument("--transfer-mode", choices=("cpu_push", "mem_stream"),
+                      default="cpu_push")
   args = parser.parse_args()
   names = [name.strip() for name in args.profiles.split(",") if name.strip()]
   unknown = [name for name in names if name not in PROFILES]
@@ -304,15 +337,17 @@ def main() -> int:
   rows: list[dict[str, str]] = []
   try:
     for name in names:
-      rows.append(evaluate_profile(PROFILES[name], args.container, args.timeout))
+      rows.append(evaluate_profile(PROFILES[name], args.container, args.timeout,
+                                   args.transfer_mode))
   finally:
+    results = RESULTS_ROOT / args.transfer_mode
     run_streamed(
         docker_make(args.container, ["clean_all"]), ROOT,
-        RESULTS / "cleanup.log", args.timeout,
-        "Proposal B CPU_PUSH firmware cleanup",
+        results / "cleanup.log", args.timeout,
+        f"Proposal B {args.transfer_mode.upper()} firmware cleanup",
     )
 
-  summary = write_summary(rows)
+  summary = write_summary(rows, args.transfer_mode)
   print(f"[done] wrote {summary}", flush=True)
   for row in rows:
     print(

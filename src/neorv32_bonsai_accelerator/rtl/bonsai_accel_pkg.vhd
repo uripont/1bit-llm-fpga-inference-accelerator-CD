@@ -7,7 +7,7 @@ package bonsai_accel_pkg is
 
   -- CFS identity and interface version (major.minor.patch in bits 31:8).
   constant BONSAI_ACCEL_ID_C      : std_ulogic_vector(31 downto 0) := x"424E5341"; -- "BNSA"
-  constant BONSAI_ACCEL_VERSION_C : std_ulogic_vector(31 downto 0) := x"00010300";
+  constant BONSAI_ACCEL_VERSION_C : std_ulogic_vector(31 downto 0) := x"00010400";
 
   -- CFS word-addressed register map.
   constant REG_ID_C                : natural := 0;  -- 0x00, read-only
@@ -40,6 +40,12 @@ package bonsai_accel_pkg is
   constant REG_COUNTER_WORK_C          : natural := 26; -- 0x68
   constant REG_ATTN_HEADS_DIM_C        : natural := 27; -- 0x6c
   constant REG_ATTN_CONTEXT_C          : natural := 28; -- 0x70
+
+  -- Simulation backing-memory aperture. Descriptor addresses remain byte
+  -- offsets from this memory's base, matching the abstract PSRAM interface.
+  constant MEM_WINDOW_BASE_WORD_C : natural := 256;
+  constant MEM_WINDOW_WORDS_C     : natural := 16128;
+  constant DESCRIPTOR_COUNT_C     : natural := 16;
 
   -- Command register pulse bits.
   constant COMMAND_START_BIT_C : natural := 0;
