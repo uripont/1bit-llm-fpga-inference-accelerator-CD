@@ -56,7 +56,7 @@ architecture rtl of attn_kv_engine is
     PREPARE_HEAD,
     REQUEST_QUERY, CONSUME_QUERY,
     SELECT_K_POSITION, SCORE_CURRENT_K, REQUEST_K_CACHE, CONSUME_K_CACHE,
-    NORMALIZE,
+    NORMALIZE_FIND_MAX, NORMALIZE_EXP_SUM, NORMALIZE_DIVIDE,
     SELECT_V_POSITION, REQUEST_V_CACHE, CONSUME_V_CACHE,
     REQUEST_OUTPUT, PRODUCE_OUTPUT,
     ERROR_STATE
@@ -79,12 +79,17 @@ architecture rtl of attn_kv_engine is
   type kv_vector_t is array (
     0 to ATTN_MAX_KV_HEADS_C * ATTN_MAX_HEAD_DIM_C - 1) of signed(15 downto 0);
   type score_memory_t is array (0 to ATTN_SCORE_CAPACITY_C - 1) of signed(39 downto 0);
+  type weight_memory_t is array (0 to ATTN_SCORE_CAPACITY_C - 1) of unsigned(15 downto 0);
   signal query_values : vector_t;
   signal current_k_values, current_v_values : kv_vector_t;
   signal scores : score_memory_t;
+  signal normalized_weights : weight_memory_t;
   signal score_accumulator : signed(39 downto 0);
-  signal score_checksum : unsigned(31 downto 0);
+  signal max_score : signed(39 downto 0);
+  signal exp_sum : unsigned(24 downto 0);
+  signal score_checksum, normalization_checksum : unsigned(31 downto 0);
   signal score_word_index : natural range 0 to ATTN_MAX_HEAD_DIM_C / 2 - 1;
+  signal normalization_index : natural range 0 to ATTN_SCORE_CAPACITY_C - 1;
   signal input_accept, output_accept : std_ulogic;
   signal tile_words : natural range 1 to ATTN_VECTOR_TILE_WORDS_C;
   signal mapped_kv_head, transaction_tile : natural range 0 to 65535;
@@ -107,6 +112,32 @@ architecture rtl of attn_kv_engine is
     extended := resize(value, 64);
     return unsigned(extended(31 downto 0)) xor
            unsigned(extended(63 downto 32));
+  end function;
+
+  type exp_lut_t is array (natural range <>) of natural;
+  constant EXP_INTEGER_Q16_C : exp_lut_t(0 to 11) := (
+    65536, 24109, 8869, 3263, 1200, 442, 162, 60, 22, 8, 3, 1);
+  constant EXP_FRACTION_Q16_C : exp_lut_t(0 to 15) := (
+    65536, 61565, 57835, 54331, 51039, 47947, 45042, 42313,
+    39750, 37341, 35079, 32954, 30957, 29081, 27319, 25664);
+
+  function exp_negative_q16(delta : signed(39 downto 0)) return unsigned is
+    variable magnitude : unsigned(39 downto 0);
+    variable integer_part, fraction_index : natural;
+    variable product, rounded : unsigned(33 downto 0);
+  begin
+    if delta >= 0 then
+      return to_unsigned(65536, 17);
+    elsif delta <= to_signed(-12 * 65536, 40) then
+      return to_unsigned(0, 17);
+    end if;
+    magnitude := unsigned(-delta);
+    integer_part := to_integer(magnitude(19 downto 16));
+    fraction_index := to_integer(magnitude(15 downto 12));
+    product := to_unsigned(EXP_INTEGER_Q16_C(integer_part), 17) *
+               to_unsigned(EXP_FRACTION_Q16_C(fraction_index), 17);
+    rounded := product + to_unsigned(32768, 34);
+    return resize(shift_right(rounded, 16), 17);
   end function;
 
   function words_for_segment(
@@ -169,7 +200,7 @@ begin
   output_data_o <= append_tile(word_index) when
     (state = PRODUCE_APPEND_K) or (state = PRODUCE_APPEND_V) else
     std_ulogic_vector(
-    head_checksum xor score_checksum xor
+    head_checksum xor score_checksum xor normalization_checksum xor
     shift_left(to_unsigned(head_index, 32), 24) xor
     shift_left(to_unsigned(segment_index, 32), 16) xor
     to_unsigned(word_index, 32));
@@ -182,7 +213,10 @@ begin
     (word_index = tile_words - 1) else '0';
   error_o <= '1' when state = ERROR_STATE else '0';
   active_o <= '1' when
-    (state = SCORE_CURRENT_K) or (state = NORMALIZE)
+    (state = SCORE_CURRENT_K) or
+    (state = NORMALIZE_FIND_MAX) or
+    (state = NORMALIZE_EXP_SUM) or
+    (state = NORMALIZE_DIVIDE)
     else input_accept or output_accept;
   input_wait_o <= '1' when input_ready_o = '1' and input_valid_i = '0' else '0';
   output_wait_o <= '1' when
@@ -201,6 +235,10 @@ begin
     variable next_score_v : signed(39 downto 0);
     variable scaled_wide_v : signed(55 downto 0);
     variable scaled_score_v : signed(39 downto 0);
+    variable exp_value_v : unsigned(16 downto 0);
+    variable next_exp_sum_v : unsigned(24 downto 0);
+    variable weight_numerator_v : unsigned(32 downto 0);
+    variable weight_v : unsigned(15 downto 0);
   begin
     if rstn_i = '0' then
       state           <= IDLE;
@@ -219,7 +257,11 @@ begin
       head_checksum   <= (others => '0');
       score_accumulator <= (others => '0');
       score_checksum <= (others => '0');
+      max_score <= (others => '0');
+      exp_sum <= (others => '0');
+      normalization_checksum <= (others => '0');
       score_word_index <= 0;
+      normalization_index <= 0;
     elsif rising_edge(clk_i) then
       case state is
         when IDLE | ERROR_STATE =>
@@ -257,7 +299,11 @@ begin
                 head_checksum   <= (others => '0');
                 score_accumulator <= (others => '0');
                 score_checksum <= (others => '0');
+                max_score <= (others => '0');
+                exp_sum <= (others => '0');
+                normalization_checksum <= (others => '0');
                 score_word_index <= 0;
+                normalization_index <= 0;
                 state           <= REQUEST_CURRENT_K;
               else
                 state <= ERROR_STATE;
@@ -372,8 +418,11 @@ begin
           word_index <= 0;
           head_checksum <= append_checksum;
           score_checksum <= (others => '0');
+          normalization_checksum <= (others => '0');
           score_accumulator <= (others => '0');
+          exp_sum <= (others => '0');
           score_word_index <= 0;
+          normalization_index <= 0;
           state <= REQUEST_QUERY;
 
         when REQUEST_QUERY =>
@@ -437,7 +486,8 @@ begin
             score_accumulator <= (others => '0');
             if context_index = context_count - 1 then
               context_index <= 0;
-              state <= NORMALIZE;
+              normalization_index <= 0;
+              state <= NORMALIZE_FIND_MAX;
             else
               context_index <= context_index + 1;
               state <= SELECT_K_POSITION;
@@ -476,7 +526,8 @@ begin
                 score_accumulator <= (others => '0');
                 if context_index = context_count - 1 then
                   context_index <= 0;
-                  state <= NORMALIZE;
+                  normalization_index <= 0;
+                  state <= NORMALIZE_FIND_MAX;
                 else
                   context_index <= context_index + 1;
                   state <= SELECT_K_POSITION;
@@ -490,10 +541,50 @@ begin
             end if;
           end if;
 
-        when NORMALIZE =>
-          context_index <= 0;
-          segment_index <= 0;
-          state <= SELECT_V_POSITION;
+        when NORMALIZE_FIND_MAX =>
+          if (normalization_index = 0) or
+             (scores(normalization_index) > max_score) then
+            max_score <= scores(normalization_index);
+          end if;
+          if normalization_index = context_count - 1 then
+            normalization_index <= 0;
+            exp_sum <= (others => '0');
+            state <= NORMALIZE_EXP_SUM;
+          else
+            normalization_index <= normalization_index + 1;
+          end if;
+
+        when NORMALIZE_EXP_SUM =>
+          exp_value_v := exp_negative_q16(
+            scores(normalization_index) - max_score);
+          next_exp_sum_v := exp_sum + resize(exp_value_v, 25);
+          exp_sum <= next_exp_sum_v;
+          if normalization_index = context_count - 1 then
+            normalization_index <= 0;
+            state <= NORMALIZE_DIVIDE;
+          else
+            normalization_index <= normalization_index + 1;
+          end if;
+
+        when NORMALIZE_DIVIDE =>
+          exp_value_v := exp_negative_q16(
+            scores(normalization_index) - max_score);
+          weight_numerator_v :=
+            exp_value_v * to_unsigned(65535, 16) +
+            resize(shift_right(exp_sum, 1), 33);
+          weight_v := resize(weight_numerator_v / exp_sum, 16);
+          normalized_weights(normalization_index) <= weight_v;
+          normalization_checksum <= normalization_checksum xor
+            shift_left(resize(weight_v, 32), normalization_index mod 16) xor
+            to_unsigned(normalization_index, 32);
+          if normalization_index = context_count - 1 then
+            normalization_index <= 0;
+            context_index <= 0;
+            segment_index <= 0;
+            state <= SELECT_V_POSITION;
+          else
+            normalization_index <= normalization_index + 1;
+          end if;
 
         when SELECT_V_POSITION =>
           if context_index = append_position then

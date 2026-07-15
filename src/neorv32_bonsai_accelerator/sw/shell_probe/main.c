@@ -371,36 +371,83 @@ static int16_t attention_fixture_element(unsigned int role,
              : (int16_t)(packed & 0xffffu);
 }
 
-static uint32_t expected_attention_score_checksum(
-    const struct attention_profile *profile, unsigned int selected_head) {
+static int64_t attention_reference_score(
+    const struct attention_profile *profile, unsigned int selected_head,
+    unsigned int position) {
   const unsigned int segments = attention_segments(profile->head_dim);
   const unsigned int mapped_kv_head =
       selected_head * profile->kv_heads / profile->heads;
+  int64_t dot = 0;
+
+  for (unsigned int element = 0; element < profile->head_dim; ++element) {
+    const unsigned int segment =
+        element / BONSAI_ATTN_VECTOR_TILE_ELEMENTS;
+    const unsigned int element_in_segment =
+        element % BONSAI_ATTN_VECTOR_TILE_ELEMENTS;
+    const unsigned int query_tile = selected_head * segments + segment;
+    const unsigned int k_role = position == profile->append_position
+                                    ? BONSAI_ROLE_CURRENT_K
+                                    : BONSAI_ROLE_K_CACHE;
+    const unsigned int k_tile = position == profile->append_position
+        ? mapped_kv_head * segments + segment
+        : (mapped_kv_head * profile->context + position) * segments + segment;
+    const int32_t query = attention_fixture_element(
+        BONSAI_ROLE_QUERY, query_tile, element_in_segment);
+    const int32_t key = attention_fixture_element(
+        k_role, k_tile, element_in_segment);
+    dot += (int64_t)query * key;
+  }
+  return (dot * attention_inv_sqrt_q16(profile->head_dim)) >> 16;
+}
+
+static uint32_t expected_attention_score_checksum(
+    const struct attention_profile *profile, unsigned int selected_head) {
   uint32_t checksum = 0;
 
   for (unsigned int position = 0; position < profile->context; ++position) {
-    int64_t dot = 0;
-    for (unsigned int element = 0; element < profile->head_dim; ++element) {
-      const unsigned int segment =
-          element / BONSAI_ATTN_VECTOR_TILE_ELEMENTS;
-      const unsigned int element_in_segment =
-          element % BONSAI_ATTN_VECTOR_TILE_ELEMENTS;
-      const unsigned int query_tile = selected_head * segments + segment;
-      const unsigned int k_role = position == profile->append_position
-                                      ? BONSAI_ROLE_CURRENT_K
-                                      : BONSAI_ROLE_K_CACHE;
-      const unsigned int k_tile = position == profile->append_position
-          ? mapped_kv_head * segments + segment
-          : (mapped_kv_head * profile->context + position) * segments + segment;
-      const int32_t query = attention_fixture_element(
-          BONSAI_ROLE_QUERY, query_tile, element_in_segment);
-      const int32_t key = attention_fixture_element(
-          k_role, k_tile, element_in_segment);
-      dot += (int64_t)query * key;
-    }
     const int64_t scaled =
-        (dot * attention_inv_sqrt_q16(profile->head_dim)) >> 16;
+        attention_reference_score(profile, selected_head, position);
     checksum ^= (uint32_t)scaled ^ (uint32_t)((uint64_t)scaled >> 32);
+  }
+  return checksum;
+}
+
+static uint32_t attention_exp_negative_q16(int64_t delta) {
+  static const uint32_t integer_lut[12] = {
+      65536, 24109, 8869, 3263, 1200, 442, 162, 60, 22, 8, 3, 1};
+  static const uint32_t fraction_lut[16] = {
+      65536, 61565, 57835, 54331, 51039, 47947, 45042, 42313,
+      39750, 37341, 35079, 32954, 30957, 29081, 27319, 25664};
+  if (delta >= 0) return 65536;
+  if (delta <= -12 * INT64_C(65536)) return 0;
+  const uint64_t magnitude = (uint64_t)-delta;
+  const unsigned int integer_part = (unsigned int)(magnitude >> 16);
+  const unsigned int fraction_index = (unsigned int)((magnitude >> 12) & 15u);
+  return (uint32_t)(((uint64_t)integer_lut[integer_part] *
+                     fraction_lut[fraction_index] + 32768u) >> 16);
+}
+
+static uint32_t expected_attention_normalization_checksum(
+    const struct attention_profile *profile, unsigned int selected_head) {
+  int64_t max_score = INT64_MIN;
+  uint32_t denominator = 0;
+  uint32_t checksum = 0;
+
+  for (unsigned int position = 0; position < profile->context; ++position) {
+    const int64_t score =
+        attention_reference_score(profile, selected_head, position);
+    if (score > max_score) max_score = score;
+  }
+  for (unsigned int position = 0; position < profile->context; ++position) {
+    denominator += attention_exp_negative_q16(
+        attention_reference_score(profile, selected_head, position) - max_score);
+  }
+  for (unsigned int position = 0; position < profile->context; ++position) {
+    const uint32_t exponential = attention_exp_negative_q16(
+        attention_reference_score(profile, selected_head, position) - max_score);
+    const uint32_t weight = (uint32_t)(
+        ((uint64_t)exponential * 65535u + denominator / 2u) / denominator);
+    checksum ^= (weight << (position % 16u)) ^ position;
   }
   return checksum;
 }
@@ -459,6 +506,7 @@ static int run_attention_probe(const struct attention_profile *profile,
     expected_head_output[head] =
         expected_attention_head_checksum(profile, head) ^
         expected_attention_score_checksum(profile, head) ^
+        expected_attention_normalization_checksum(profile, head) ^
         ((uint32_t)head << 24);
   }
 
@@ -545,7 +593,8 @@ static int run_attention_probe(const struct attention_profile *profile,
   read_metrics(metrics);
   const int valid = metrics_are_classified(metrics) &&
                     metrics->active_cycles ==
-                        input_words + output_words + profile->heads +
+                        input_words + output_words +
+                        3u * profile->heads * profile->context +
                         profile->heads * vector_words &&
                     metrics->input_wait_cycles != 0 &&
                     metrics->output_wait_cycles == 0 &&
