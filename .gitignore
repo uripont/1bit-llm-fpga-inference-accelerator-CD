@@ -18,3 +18,12 @@ results/tier2_explicit_runner/full/*
 !results/tier2_explicit_runner/full/tokens_1.log
 !results/tier2_explicit_runner/full/tokens_2.log
 !results/tier2_explicit_runner/full/tokens_4.log
+!results/proposal_a_evaluation/
+results/proposal_a_evaluation/*
+!results/proposal_a_evaluation/q1_matvec/
+results/proposal_a_evaluation/q1_matvec/*
+!results/proposal_a_evaluation/q1_matvec/summary.csv
+!results/proposal_a_evaluation/q1_matvec/board/
+!results/proposal_a_evaluation/q1_matvec/board/*
+!results/proposal_a_evaluation/q1_matvec/bonsai/
+!results/proposal_a_evaluation/q1_matvec/bonsai/*

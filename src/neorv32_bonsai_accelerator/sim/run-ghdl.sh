@@ -17,6 +17,7 @@ GHDL="${GHDL:-ghdl}"
 IMEM_SIZE="${IMEM_SIZE:-16384}"
 DMEM_SIZE="${DMEM_SIZE:-8192}"
 STOP_TIME="${STOP_TIME:-15ms}"
+SUCCESS_PATTERN="${SUCCESS_PATTERN:-shell_probe=PASS}"
 
 rm -rf "${BUILD_DIR}"
 mkdir -p "${BUILD_DIR}"
@@ -49,7 +50,7 @@ done < <(find "${NEORV32_ROOT}/sim" -maxdepth 1 -type f -name '*.vhd' -print0)
 echo "[2/3] Elaborating the complete NEORV32 testbench"
 "${GHDL}" -m --std=08 --work=neorv32 --workdir="${BUILD_DIR}" neorv32_tb
 
-echo "[3/3] Running the CFS firmware probe"
+echo "[3/3] Running the CFS firmware"
 cd "${NEORV32_ROOT}/sim"
 : > tb.uart0_rx.log
 SIM_LOG="${BUILD_DIR}/shell-probe.log"
@@ -63,5 +64,5 @@ SIM_LOG="${BUILD_DIR}/shell-probe.log"
   --assert-level=error \
   --stop-time="${STOP_TIME}" | tee "${SIM_LOG}"
 
-grep -q '^shell_probe=PASS$' "${SIM_LOG}"
-echo "[pass] Bonsai accelerator CFS register contract"
+grep -q "^${SUCCESS_PATTERN}$" "${SIM_LOG}"
+echo "[pass] CFS firmware success marker: ${SUCCESS_PATTERN}"
