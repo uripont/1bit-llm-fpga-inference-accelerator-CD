@@ -225,6 +225,13 @@ static int run_attention_probe(struct command_metrics *metrics) {
   unsigned int input_index = 0;
   unsigned int output_index = 0;
   uint32_t terminal_status = UINT32_MAX;
+  const uint32_t heads_dim = bonsai_accel_attention_heads_dim(1, 1, 32);
+  const uint32_t context = bonsai_accel_attention_context(2, 1);
+
+  bonsai_accel_write(BONSAI_REG_ATTN_HEADS_DIM, heads_dim);
+  bonsai_accel_write(BONSAI_REG_ATTN_CONTEXT, context);
+  if (bonsai_accel_read(BONSAI_REG_ATTN_HEADS_DIM) != heads_dim ||
+      bonsai_accel_read(BONSAI_REG_ATTN_CONTEXT) != context) return 0;
 
   bonsai_accel_write(
       BONSAI_REG_CONFIG,
@@ -279,6 +286,26 @@ static uint32_t wait_for_terminal(void) {
     if ((status & TERMINAL_MASK) != 0) return status;
   }
   return UINT32_MAX;
+}
+
+static int rejects_bad_attention_shape(void) {
+  bonsai_accel_write(
+      BONSAI_REG_ATTN_HEADS_DIM,
+      bonsai_accel_attention_heads_dim(2, 0, 16));
+  bonsai_accel_write(
+      BONSAI_REG_ATTN_CONTEXT,
+      bonsai_accel_attention_context(2, 1));
+  bonsai_accel_write(
+      BONSAI_REG_CONFIG,
+      bonsai_accel_config(BONSAI_SERVICE_ATTN_KV, BONSAI_TRANSFER_CPU_PUSH));
+  bonsai_accel_write(BONSAI_REG_COMMAND, BONSAI_COMMAND_START);
+
+  const uint32_t status = wait_for_terminal();
+  const int valid = status != UINT32_MAX &&
+                    (status & BONSAI_STATUS_ERROR) != 0 &&
+                    bonsai_accel_status_error(status) == BONSAI_ERROR_BAD_COMMAND;
+  bonsai_accel_write(BONSAI_REG_COMMAND, BONSAI_COMMAND_ACK);
+  return valid && bonsai_accel_read(BONSAI_REG_STATUS) == 0;
 }
 
 static void print_metrics(const char *prefix,
@@ -343,7 +370,8 @@ int main(void) {
           Q1_FIXTURE_BONSAI_ROW, Q1_FIXTURE_MULTI_ROWS,
           Q1_FIXTURE_MULTI_GROUPS, BONSAI_Q1_SCALE_FP16, 0, 0, 0,
           &q1_multi_row_metrics, q1_multi_row_output) ||
-      !run_attention_probe(&attention_metrics)) {
+      !run_attention_probe(&attention_metrics) ||
+      !rejects_bad_attention_shape()) {
     neorv32_uart0_printf("shell_probe=FAIL reason=cpu_push\n");
     return 1;
   }
@@ -389,6 +417,8 @@ int main(void) {
   print_metrics("q1_bonsai_row", &q1_bonsai_row_metrics);
   print_metrics("q1_multi_row", &q1_multi_row_metrics);
   print_metrics("attention_probe", &attention_metrics);
+  neorv32_uart0_printf("attention_contract heads=1 kv_heads=1 head_dim=32 ctx=2 append=1\n");
+  neorv32_uart0_printf("attention_bad_shape_error=%u\n", (uint32_t)BONSAI_ERROR_BAD_COMMAND);
   neorv32_uart0_printf("unsupported_mode_error=%u\n", (uint32_t)unsupported_error);
   neorv32_uart0_printf("shell_probe=PASS\n");
   return 0;

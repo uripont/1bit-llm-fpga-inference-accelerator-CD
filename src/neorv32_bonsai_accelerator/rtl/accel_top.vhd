@@ -15,6 +15,7 @@ entity accel_top is
     acknowledge_i   : in std_ulogic;
     service_i       : in service_t;
     transfer_mode_i : in transfer_mode_t;
+    service_config_valid_i : in std_ulogic;
 
     engine_busy_i  : in std_ulogic;
     engine_done_i  : in std_ulogic;
@@ -51,7 +52,8 @@ begin
   command_valid <= '1' when
     ((selected_service = SERVICE_Q1_MATVEC_C) or
      (selected_service = SERVICE_ATTN_KV_C)) and
-    (selected_transfer = TRANSFER_CPU_PUSH_C)
+    (selected_transfer = TRANSFER_CPU_PUSH_C) and
+    (service_config_valid_i = '1')
     else '0';
 
   engine_launch_o <= '1' when (state = PREPARE) and (command_valid = '1') else '0';
@@ -92,6 +94,9 @@ begin
             state      <= ERROR;
           elsif selected_transfer /= TRANSFER_CPU_PUSH_C then
             error_code <= ERROR_UNSUPPORTED_MODE_C;
+            state      <= ERROR;
+          elsif service_config_valid_i = '0' then
+            error_code <= ERROR_BAD_COMMAND_C;
             state      <= ERROR;
           else
             state <= RUN;

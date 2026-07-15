@@ -22,6 +22,11 @@ entity cfs_reg_file is
     matvec_rows_o   : out std_ulogic_vector(15 downto 0);
     matvec_groups_o : out std_ulogic_vector(15 downto 0);
     matvec_scale_fixed_o : out std_ulogic;
+    attn_heads_o           : out std_ulogic_vector(7 downto 0);
+    attn_kv_heads_o        : out std_ulogic_vector(7 downto 0);
+    attn_head_dim_o        : out std_ulogic_vector(15 downto 0);
+    attn_context_length_o  : out std_ulogic_vector(15 downto 0);
+    attn_append_position_o : out std_ulogic_vector(15 downto 0);
 
     busy_i          : in std_ulogic;
     done_i          : in std_ulogic;
@@ -64,6 +69,7 @@ end cfs_reg_file;
 architecture rtl of cfs_reg_file is
 
   signal config_reg, matvec_shape_reg : std_ulogic_vector(31 downto 0);
+  signal attn_heads_dim_reg, attn_context_reg : std_ulogic_vector(31 downto 0);
 
 begin
 
@@ -72,6 +78,13 @@ begin
   matvec_rows_o   <= matvec_shape_reg(MATVEC_ROWS_MSB_C downto MATVEC_ROWS_LSB_C);
   matvec_groups_o <= matvec_shape_reg(MATVEC_GROUPS_MSB_C downto MATVEC_GROUPS_LSB_C);
   matvec_scale_fixed_o <= config_reg(CONFIG_Q1_SCALE_FIXED_BIT_C);
+  attn_heads_o <= attn_heads_dim_reg(ATTN_HEADS_MSB_C downto ATTN_HEADS_LSB_C);
+  attn_kv_heads_o <= attn_heads_dim_reg(ATTN_KV_HEADS_MSB_C downto ATTN_KV_HEADS_LSB_C);
+  attn_head_dim_o <= attn_heads_dim_reg(ATTN_HEAD_DIM_MSB_C downto ATTN_HEAD_DIM_LSB_C);
+  attn_context_length_o <=
+    attn_context_reg(ATTN_CONTEXT_LENGTH_MSB_C downto ATTN_CONTEXT_LENGTH_LSB_C);
+  attn_append_position_o <=
+    attn_context_reg(ATTN_APPEND_POSITION_MSB_C downto ATTN_APPEND_POSITION_LSB_C);
 
   bus_access : process(rstn_i, clk_i)
     variable word_addr_v : natural range 0 to 16383;
@@ -84,6 +97,8 @@ begin
     if rstn_i = '0' then
       config_reg   <= (others => '0');
       matvec_shape_reg <= (others => '0');
+      attn_heads_dim_reg <= (others => '0');
+      attn_context_reg <= (others => '0');
       start_o      <= '0';
       acknowledge_o <= '0';
       fifo_input_write_o <= '0';
@@ -121,6 +136,14 @@ begin
                 if busy_i = '0' then
                   matvec_shape_reg <= bus_req_i.data;
                 end if;
+              when REG_ATTN_HEADS_DIM_C =>
+                if busy_i = '0' then
+                  attn_heads_dim_reg <= bus_req_i.data;
+                end if;
+              when REG_ATTN_CONTEXT_C =>
+                if busy_i = '0' then
+                  attn_context_reg <= bus_req_i.data;
+                end if;
               when REG_FIFO_IN_C =>
                 fifo_input_data_o  <= bus_req_i.data;
                 fifo_input_write_o <= '1';
@@ -147,6 +170,10 @@ begin
               bus_rsp_o.data <= config_reg;
             when REG_MATVEC_SHAPE_C =>
               bus_rsp_o.data <= matvec_shape_reg;
+            when REG_ATTN_HEADS_DIM_C =>
+              bus_rsp_o.data <= attn_heads_dim_reg;
+            when REG_ATTN_CONTEXT_C =>
+              bus_rsp_o.data <= attn_context_reg;
             when REG_REQUEST_C =>
               request_v := (others => '0');
               request_v(REQUEST_INPUT_VALID_BIT_C) := input_request_valid_i;

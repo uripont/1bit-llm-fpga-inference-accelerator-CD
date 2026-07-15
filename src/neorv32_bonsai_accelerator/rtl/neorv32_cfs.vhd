@@ -2,6 +2,7 @@
 
 library ieee;
 use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 
 library neorv32;
 use neorv32.neorv32_package.all;
@@ -26,6 +27,10 @@ architecture bonsai_accel_rtl of neorv32_cfs is
   signal config_transfer : transfer_mode_t;
   signal config_matvec_rows, config_matvec_groups : std_ulogic_vector(15 downto 0);
   signal config_matvec_scale_fixed : std_ulogic;
+  signal config_attn_heads, config_attn_kv_heads : std_ulogic_vector(7 downto 0);
+  signal config_attn_head_dim, config_attn_context_length : std_ulogic_vector(15 downto 0);
+  signal config_attn_append_position : std_ulogic_vector(15 downto 0);
+  signal service_config_valid : std_ulogic;
 
   signal status_busy, status_done, status_error : std_ulogic;
   signal selected_service : service_t;
@@ -92,6 +97,26 @@ begin
   irq_o     <= '0';
   cfs_out_o <= (others => '0');
 
+  shape_validation : process(all)
+    variable heads_v, kv_heads_v : natural;
+    variable head_dim_v, context_v, append_v : natural;
+  begin
+    service_config_valid <= '1';
+    if selected_service = SERVICE_ATTN_KV_C then
+      heads_v := to_integer(unsigned(config_attn_heads));
+      kv_heads_v := to_integer(unsigned(config_attn_kv_heads));
+      head_dim_v := to_integer(unsigned(config_attn_head_dim));
+      context_v := to_integer(unsigned(config_attn_context_length));
+      append_v := to_integer(unsigned(config_attn_append_position));
+      if (heads_v = 0) or (kv_heads_v = 0) or (head_dim_v = 0) or
+         (context_v = 0) or (append_v >= context_v) then
+        service_config_valid <= '0';
+      elsif (heads_v mod kv_heads_v) /= 0 then
+        service_config_valid <= '0';
+      end if;
+    end if;
+  end process shape_validation;
+
   engine_control <= engine_interval and not engine_active and
                     not engine_input_wait and not engine_output_wait;
 
@@ -146,6 +171,11 @@ begin
       matvec_rows_o => config_matvec_rows,
       matvec_groups_o => config_matvec_groups,
       matvec_scale_fixed_o => config_matvec_scale_fixed,
+      attn_heads_o => config_attn_heads,
+      attn_kv_heads_o => config_attn_kv_heads,
+      attn_head_dim_o => config_attn_head_dim,
+      attn_context_length_o => config_attn_context_length,
+      attn_append_position_o => config_attn_append_position,
       busy_i => status_busy,
       done_i => status_done,
       error_i => status_error,
@@ -189,6 +219,7 @@ begin
       acknowledge_i => command_acknowledge,
       service_i => config_service,
       transfer_mode_i => config_transfer,
+      service_config_valid_i => service_config_valid,
       engine_busy_i => engine_busy,
       engine_done_i => engine_done,
       engine_error_i => engine_error,
@@ -208,7 +239,7 @@ begin
 
   frontend_control_inst : entity neorv32.frontend_control
     generic map (
-      TILE_WORD_CAPACITY => Q8_BLOCK_WORDS_C
+      TILE_WORD_CAPACITY => ATTN_VECTOR_TILE_WORDS_C
     )
     port map (
       clk_i => clk_i,

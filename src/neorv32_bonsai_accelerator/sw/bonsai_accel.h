@@ -5,7 +5,7 @@
 #include <neorv32.h>
 
 #define BONSAI_ACCEL_ID UINT32_C(0x424e5341)
-#define BONSAI_ACCEL_VERSION UINT32_C(0x00010200)
+#define BONSAI_ACCEL_VERSION UINT32_C(0x00010300)
 
 enum bonsai_accel_register {
   BONSAI_REG_ID = 0,
@@ -35,6 +35,8 @@ enum bonsai_accel_register {
   BONSAI_REG_COUNTER_INPUT_BYTES = 24,
   BONSAI_REG_COUNTER_OUTPUT_BYTES = 25,
   BONSAI_REG_COUNTER_WORK = 26,
+  BONSAI_REG_ATTN_HEADS_DIM = 27,
+  BONSAI_REG_ATTN_CONTEXT = 28,
 };
 
 enum bonsai_accel_service {
@@ -113,12 +115,29 @@ enum bonsai_accel_q1_scale_format {
 #define BONSAI_MATVEC_ROWS_SHIFT 16
 #define BONSAI_MATVEC_ROWS_MASK UINT32_C(0xffff0000)
 
+#define BONSAI_ATTN_HEADS_SHIFT 0
+#define BONSAI_ATTN_HEADS_MASK UINT32_C(0x000000ff)
+#define BONSAI_ATTN_KV_HEADS_SHIFT 8
+#define BONSAI_ATTN_KV_HEADS_MASK UINT32_C(0x0000ff00)
+#define BONSAI_ATTN_HEAD_DIM_SHIFT 16
+#define BONSAI_ATTN_HEAD_DIM_MASK UINT32_C(0xffff0000)
+#define BONSAI_ATTN_CONTEXT_LENGTH_SHIFT 0
+#define BONSAI_ATTN_CONTEXT_LENGTH_MASK UINT32_C(0x0000ffff)
+#define BONSAI_ATTN_APPEND_POSITION_SHIFT 16
+#define BONSAI_ATTN_APPEND_POSITION_MASK UINT32_C(0xffff0000)
+
 #define BONSAI_Q8_BLOCK_ELEMENTS 32u
 #define BONSAI_Q1_GROUP_ELEMENTS 128u
 #define BONSAI_Q8_BLOCKS_PER_Q1 4u
 #define BONSAI_Q8_BLOCK_WORDS 9u
 #define BONSAI_Q1_GROUP_WORDS 5u
 #define BONSAI_MATVEC_OUTPUT_WORDS 1u
+
+/* Attention vector roles share packed signed-int16 words: element 2n occupies
+ * bits 15:0 and element 2n+1 occupies bits 31:16. Larger vectors continue in
+ * consecutive tiles; the final transaction carries its valid word count. */
+#define BONSAI_ATTN_VECTOR_TILE_ELEMENTS 32u
+#define BONSAI_ATTN_VECTOR_TILE_WORDS 16u
 
 static inline uint32_t bonsai_accel_read(unsigned int reg) {
   return NEORV32_CFS->REG[reg];
@@ -147,6 +166,19 @@ static inline uint32_t bonsai_accel_matvec_shape(uint16_t rows,
                                                  uint16_t groups_per_row) {
   return ((uint32_t) groups_per_row << BONSAI_MATVEC_GROUPS_SHIFT) |
          ((uint32_t) rows << BONSAI_MATVEC_ROWS_SHIFT);
+}
+
+static inline uint32_t bonsai_accel_attention_heads_dim(
+    uint8_t heads, uint8_t kv_heads, uint16_t head_dim) {
+  return ((uint32_t)heads << BONSAI_ATTN_HEADS_SHIFT) |
+         ((uint32_t)kv_heads << BONSAI_ATTN_KV_HEADS_SHIFT) |
+         ((uint32_t)head_dim << BONSAI_ATTN_HEAD_DIM_SHIFT);
+}
+
+static inline uint32_t bonsai_accel_attention_context(
+    uint16_t context_length, uint16_t append_position) {
+  return ((uint32_t)context_length << BONSAI_ATTN_CONTEXT_LENGTH_SHIFT) |
+         ((uint32_t)append_position << BONSAI_ATTN_APPEND_POSITION_SHIFT);
 }
 
 static inline enum bonsai_accel_error bonsai_accel_status_error(uint32_t status) {

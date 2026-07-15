@@ -7,7 +7,7 @@ package bonsai_accel_pkg is
 
   -- CFS identity and interface version (major.minor.patch in bits 31:8).
   constant BONSAI_ACCEL_ID_C      : std_ulogic_vector(31 downto 0) := x"424E5341"; -- "BNSA"
-  constant BONSAI_ACCEL_VERSION_C : std_ulogic_vector(31 downto 0) := x"00010200";
+  constant BONSAI_ACCEL_VERSION_C : std_ulogic_vector(31 downto 0) := x"00010300";
 
   -- CFS word-addressed register map.
   constant REG_ID_C                : natural := 0;  -- 0x00, read-only
@@ -38,6 +38,8 @@ package bonsai_accel_pkg is
   constant REG_COUNTER_INPUT_BYTES_C   : natural := 24; -- 0x60
   constant REG_COUNTER_OUTPUT_BYTES_C  : natural := 25; -- 0x64
   constant REG_COUNTER_WORK_C          : natural := 26; -- 0x68
+  constant REG_ATTN_HEADS_DIM_C        : natural := 27; -- 0x6c
+  constant REG_ATTN_CONTEXT_C          : natural := 28; -- 0x70
 
   -- Command register pulse bits.
   constant COMMAND_START_BIT_C : natural := 0;
@@ -94,6 +96,19 @@ package bonsai_accel_pkg is
   constant MATVEC_ROWS_LSB_C   : natural := 16;
   constant MATVEC_ROWS_MSB_C   : natural := 31;
 
+  -- Attention shape: query/KV heads occupy one byte each and head dimension
+  -- occupies the upper half. Context stores the active length and append index.
+  constant ATTN_HEADS_LSB_C       : natural := 0;
+  constant ATTN_HEADS_MSB_C       : natural := 7;
+  constant ATTN_KV_HEADS_LSB_C    : natural := 8;
+  constant ATTN_KV_HEADS_MSB_C    : natural := 15;
+  constant ATTN_HEAD_DIM_LSB_C    : natural := 16;
+  constant ATTN_HEAD_DIM_MSB_C    : natural := 31;
+  constant ATTN_CONTEXT_LENGTH_LSB_C : natural := 0;
+  constant ATTN_CONTEXT_LENGTH_MSB_C : natural := 15;
+  constant ATTN_APPEND_POSITION_LSB_C : natural := 16;
+  constant ATTN_APPEND_POSITION_MSB_C : natural := 31;
+
   -- CPU_PUSH record sizes. Multi-byte fields and packed lanes are little-endian.
   -- Q8: signed Q16 scale followed by 32 signed int8 lanes, four lanes per word.
   -- Q1: raw GGUF FP16 scale in word 0[15:0], then 128 signs in four words.
@@ -104,6 +119,13 @@ package bonsai_accel_pkg is
   constant Q8_BLOCK_WORDS_C     : natural := 9;
   constant Q1_GROUP_WORDS_C     : natural := 5;
   constant MATVEC_OUTPUT_WORDS_C : natural := 1;
+
+  -- QUERY, CURRENT_K, CURRENT_V, K_CACHE, V_CACHE, and OUTPUT tiles share the
+  -- same little-endian signed-int16 format: element 2n is word[15:0] and
+  -- element 2n+1 is word[31:16]. Larger vectors use consecutive tile indices;
+  -- a final partial tile declares only its valid word count.
+  constant ATTN_VECTOR_TILE_ELEMENTS_C : natural := 32;
+  constant ATTN_VECTOR_TILE_WORDS_C    : natural := 16;
 
   constant TILE_DIRECTION_INPUT_C  : std_ulogic := '0';
   constant TILE_DIRECTION_OUTPUT_C : std_ulogic := '1';
