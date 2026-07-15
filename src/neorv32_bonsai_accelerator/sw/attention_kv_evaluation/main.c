@@ -454,7 +454,14 @@ int main(void) {
   neorv32_uart0_printf("backend=hardware_neorv32_cfs\n");
 #ifdef EVALUATE_MEM_STREAM
   neorv32_uart0_printf("transfer_mode=mem_stream\n");
-  neorv32_uart0_printf("memory_strategy=descriptor_tile_stream\n");
+  neorv32_uart0_printf("memory_strategy=gowin_psram_hs_descriptor_stream\n");
+  neorv32_uart0_printf("memory_model=gowin_psram_hs_v2_user_interface\n");
+  neorv32_uart0_printf("psram_dq_width=16\n");
+  neorv32_uart0_printf("psram_user_data_width=64\n");
+  neorv32_uart0_printf("psram_burst_length=16\n");
+  neorv32_uart0_printf("psram_burst_bytes=32\n");
+  neorv32_uart0_printf("psram_read_latency_cycles=6\n");
+  neorv32_uart0_printf("psram_command_interval_cycles=14\n");
 #else
   neorv32_uart0_printf("transfer_mode=cpu_push\n");
   neorv32_uart0_printf("cpu_push_strategy=tile_burst_prepacked\n");

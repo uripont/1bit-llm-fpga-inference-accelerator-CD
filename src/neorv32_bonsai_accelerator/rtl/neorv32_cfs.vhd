@@ -90,10 +90,12 @@ architecture bonsai_accel_rtl of neorv32_cfs is
   signal descriptor_length, descriptor_base, descriptor_stride : std_ulogic_vector(31 downto 0);
   signal descriptor_valid : std_ulogic;
   signal descriptor_valid_mask : std_ulogic_vector(DESCRIPTOR_COUNT_C - 1 downto 0);
-  signal memory_cpu_write, memory_stream_write, memory_ready, memory_error : std_ulogic;
-  signal memory_cpu_address, memory_stream_address : std_ulogic_vector(13 downto 0);
+  signal memory_cpu_write, memory_init_done, memory_cmd_valid : std_ulogic;
+  signal memory_cmd_write, memory_cmd_ready, memory_write_valid : std_ulogic;
+  signal memory_write_done, memory_read_valid, memory_error : std_ulogic;
+  signal memory_cpu_address, memory_cmd_address : std_ulogic_vector(13 downto 0);
   signal memory_cpu_write_data, memory_cpu_read_data : std_ulogic_vector(31 downto 0);
-  signal memory_stream_write_data, memory_stream_read_data : std_ulogic_vector(31 downto 0);
+  signal memory_write_data, memory_read_data : std_ulogic_vector(63 downto 0);
 
   signal engine_launch, engine_busy, engine_done, engine_error : std_ulogic;
   signal engine_active, engine_input_wait, engine_output_wait : std_ulogic;
@@ -418,11 +420,16 @@ begin
       descriptor_base_i => descriptor_base,
       descriptor_stride_i => descriptor_stride,
       descriptor_valid_i => descriptor_valid,
-      memory_write_o => memory_stream_write,
-      memory_address_o => memory_stream_address,
-      memory_write_data_o => memory_stream_write_data,
-      memory_read_data_i => memory_stream_read_data,
-      memory_ready_i => memory_ready,
+      memory_init_done_i => memory_init_done,
+      memory_cmd_valid_o => memory_cmd_valid,
+      memory_cmd_write_o => memory_cmd_write,
+      memory_cmd_address_o => memory_cmd_address,
+      memory_cmd_ready_i => memory_cmd_ready,
+      memory_write_data_o => memory_write_data,
+      memory_write_valid_o => memory_write_valid,
+      memory_write_done_i => memory_write_done,
+      memory_read_data_i => memory_read_data,
+      memory_read_valid_i => memory_read_valid,
       memory_error_i => memory_error,
       input_wait_o => mem_input_wait,
       output_wait_o => mem_output_wait,
@@ -435,16 +442,22 @@ begin
   stream_memory_inst : entity neorv32.stream_memory
     port map (
       clk_i => clk_i,
+      rstn_i => rstn_i,
       cpu_write_i => memory_cpu_write,
       cpu_address_i => memory_cpu_address,
       cpu_write_data_i => memory_cpu_write_data,
       cpu_read_data_o => memory_cpu_read_data,
-      stream_write_i => memory_stream_write,
-      stream_address_i => memory_stream_address,
-      stream_write_data_i => memory_stream_write_data,
-      stream_read_data_o => memory_stream_read_data,
-      stream_ready_o => memory_ready,
-      stream_error_o => memory_error
+      init_done_o => memory_init_done,
+      cmd_valid_i => memory_cmd_valid,
+      cmd_write_i => memory_cmd_write,
+      cmd_address_i => memory_cmd_address,
+      cmd_ready_o => memory_cmd_ready,
+      write_data_i => memory_write_data,
+      write_valid_i => memory_write_valid,
+      write_done_o => memory_write_done,
+      read_data_o => memory_read_data,
+      read_valid_o => memory_read_valid,
+      error_o => memory_error
     );
 
   q1_matvec_engine_inst : entity neorv32.q1_matvec_engine

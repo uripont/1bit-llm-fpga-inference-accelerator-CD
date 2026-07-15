@@ -4,10 +4,10 @@
       |  ^~~~~~~
 Memory utilization:
    text	   data	    bss	    dec	    hex	filename
-   5676	      0	    576	   6252	   186c	main.elf
+   6012	      0	    576	   6588	   19bc	main.elf
 Compiling image generator...
 Generating neorv32_imem_image.vhd
-Executable (VHD): 5676 bytes
+Executable (VHD): 6012 bytes
 IMEM_SIZE=262144 DMEM_SIZE=131072 STOP_TIME=15ms \
 SUCCESS_PATTERN=evaluation_status=PASS \
 ../../sim/run-ghdl.sh "/workspaces/1bit-llm-fpga-inference-accelerator-CD/src/neorv32_bonsai_accelerator/sw/attention_kv_evaluation/neorv32_imem_image.vhd"
@@ -32,7 +32,14 @@ SUCCESS_PATTERN=evaluation_status=PASS \
 kernel=attention_kv_engine
 backend=hardware_neorv32_cfs
 transfer_mode=mem_stream
-memory_strategy=descriptor_tile_stream
+memory_strategy=gowin_psram_hs_descriptor_stream
+memory_model=gowin_psram_hs_v2_user_interface
+psram_dq_width=16
+psram_user_data_width=64
+psram_burst_length=16
+psram_burst_bytes=32
+psram_read_latency_cycles=6
+psram_command_interval_cycles=14
 input_source=synthetic_q8
 normalization_mode=stable_softmax_fixed_q16
 heads=2
@@ -45,16 +52,16 @@ value_mac=64
 softmax_elements=4
 input_transactions=8
 output_transactions=4
-command_cycles=290
-engine_cycles=280
+command_cycles=390
+engine_cycles=375
 active_cycles=140
-input_wait_cycles=96
-output_wait_cycles=0
-control_cycles=44
-frontend_input_wait=32
-frontend_output_wait=32
-input_bytes=256
+input_wait_cycles=176
 [progress] Proposal B MEM_STREAM bonsai evaluation: 61s elapsed
+output_wait_cycles=0
+control_cycles=59
+frontend_input_wait=112
+frontend_output_wait=52
+input_bytes=256
 output_bytes=128
 work_mac=128
 checksum=7569

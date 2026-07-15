@@ -76,7 +76,10 @@ PROFILES = {
 SUMMARY_FIELDS = [
     "run", "profile", "heads", "kv_heads", "head_dim", "ctx",
     "input_source", "normalization_mode", "transfer_mode",
-    "cpu_push_strategy", "memory_strategy", "score_mac", "value_mac", "softmax_elements",
+    "cpu_push_strategy", "memory_strategy", "memory_model",
+    "psram_dq_width", "psram_user_data_width", "psram_burst_length",
+    "psram_burst_bytes", "psram_read_latency_cycles",
+    "psram_command_interval_cycles", "score_mac", "value_mac", "softmax_elements",
     "logical_kv_read_bytes", "logical_kv_write_bytes",
     "logical_kv_total_bytes", "software_append_cycles",
     "software_score_cycles", "software_norm_cycles", "software_value_cycles",
@@ -196,6 +199,25 @@ def validate_compatibility(profile: Profile, software: dict[str, str],
   ]
   if mismatches:
     raise RuntimeError("compatibility check failed:\n  " + "\n  ".join(mismatches))
+
+  if hardware.get("transfer_mode") == "mem_stream":
+    expected_memory = {
+        "memory_model": "gowin_psram_hs_v2_user_interface",
+        "psram_dq_width": "16",
+        "psram_user_data_width": "64",
+        "psram_burst_length": "16",
+        "psram_burst_bytes": "32",
+        "psram_read_latency_cycles": "6",
+        "psram_command_interval_cycles": "14",
+    }
+    memory_mismatches = [
+        f"{key}: expected {value}, got {hardware.get(key, '<missing>')}"
+        for key, value in expected_memory.items() if hardware.get(key) != value
+    ]
+    if memory_mismatches:
+      raise RuntimeError(
+          "PSRAM model contract check failed:\n  " + "\n  ".join(memory_mismatches)
+      )
 
 
 def make_result(profile: Profile, software: dict[str, str],

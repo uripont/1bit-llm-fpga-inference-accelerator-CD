@@ -53,8 +53,8 @@ command_cycles=27841
 engine_cycles=27730
 active_cycles=849
 input_wait_cycles=26800
-output_wait_cycles=0
 [progress] Proposal A bonsai evaluation: 241s elapsed
+output_wait_cycles=0
 control_cycles=81
 frontend_input_wait=26064
 frontend_output_wait=107

@@ -31,7 +31,7 @@ SUCCESS_PATTERN=evaluation_status=PASS \
 kernel=q1_matvec_engine
 backend=hardware_neorv32_cfs
 transfer_mode=cpu_push
-[progress] Proposal A board evaluation: 30s elapsed
+[progress] Proposal A board evaluation: 31s elapsed
 cpu_push_strategy=tile_burst_prepacked
 q1_input_source=synthetic_packed
 q1_scale_format=fixed_q8

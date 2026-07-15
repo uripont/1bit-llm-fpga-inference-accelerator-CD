@@ -42,7 +42,7 @@ package bonsai_accel_pkg is
   constant REG_ATTN_CONTEXT_C          : natural := 28; -- 0x70
 
   -- Simulation backing-memory aperture. Descriptor addresses remain byte
-  -- offsets from this memory's base, matching the abstract PSRAM interface.
+  -- offsets from this memory's base, matching the PSRAM controller aperture.
   constant MEM_WINDOW_BASE_WORD_C : natural := 256;
   constant MEM_WINDOW_WORDS_C     : natural := 16128;
   constant DESCRIPTOR_COUNT_C     : natural := 16;

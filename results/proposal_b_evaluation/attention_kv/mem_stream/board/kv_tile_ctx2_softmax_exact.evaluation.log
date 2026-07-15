@@ -4,10 +4,10 @@
       |  ^~~~~~~
 Memory utilization:
    text	   data	    bss	    dec	    hex	filename
-   5608	      0	    512	   6120	   17e8	main.elf
+   5944	      0	    512	   6456	   1938	main.elf
 Compiling image generator...
 Generating neorv32_imem_image.vhd
-Executable (VHD): 5608 bytes
+Executable (VHD): 5944 bytes
 IMEM_SIZE=16384 DMEM_SIZE=8192 STOP_TIME=15ms \
 SUCCESS_PATTERN=evaluation_status=PASS \
 ../../sim/run-ghdl.sh "/workspaces/1bit-llm-fpga-inference-accelerator-CD/src/neorv32_bonsai_accelerator/sw/attention_kv_evaluation/neorv32_imem_image.vhd"
@@ -26,13 +26,20 @@ SUCCESS_PATTERN=evaluation_status=PASS \
 /workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_debug_auth.vhd:67:3:@0ms:(assertion warning): [NEORV32] Using DEFAULT on-chip debugger authenticator. Replace by custom module.
 /workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_top.vhd:384:5:@0ms:(assertion note): [NEORV32] The NEORV32 RISC-V Processor (v01.13.02.00), github.com/stnolting/neorv32
 /workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_top.vhd:393:5:@0ms:(assertion note): [NEORV32] Processor Configuration: CPU (single-core) IMEM-ROM DMEM I-CACHE D-CACHE XBUS CLINT GPIO UART0 UART1 SPI SDI TWI TWD PWM WDT TRNG CFS NEOLED GPTMR ONEWIRE DMA SLINK SYSINFO TRACER OCD OCD-AUTH OCD-HWBP 
-[progress] Proposal B MEM_STREAM board evaluation: 30s elapsed
 /workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_top.vhd:429:5:@0ms:(assertion warning): [NEORV32] Assuming this is a simulation.
 /workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_top.vhd:441:5:@0ms:(assertion note): [NEORV32] BOOT_MODE_SELECT 2 - booting IMEM image
+[progress] Proposal B MEM_STREAM board evaluation: 30s elapsed
 kernel=attention_kv_engine
 backend=hardware_neorv32_cfs
 transfer_mode=mem_stream
-memory_strategy=descriptor_tile_stream
+memory_strategy=gowin_psram_hs_descriptor_stream
+memory_model=gowin_psram_hs_v2_user_interface
+psram_dq_width=16
+psram_user_data_width=64
+psram_burst_length=16
+psram_burst_bytes=32
+psram_read_latency_cycles=6
+psram_command_interval_cycles=14
 input_source=synthetic_q8
 normalization_mode=stable_softmax_fixed_q16
 heads=1
@@ -45,16 +52,16 @@ value_mac=64
 softmax_elements=2
 input_transactions=5
 output_transactions=3
-command_cycles=328
-engine_cycles=310
+command_cycles=506
+engine_cycles=469
 active_cycles=166
-input_wait_cycles=100
-output_wait_cycles=0
-control_cycles=44
-frontend_input_wait=20
-frontend_output_wait=48
-input_bytes=320
+input_wait_cycles=221
 [progress] Proposal B MEM_STREAM board evaluation: 61s elapsed
+output_wait_cycles=0
+control_cycles=82
+frontend_input_wait=141
+frontend_output_wait=105
+input_bytes=320
 output_bytes=192
 work_mac=128
 checksum=5274

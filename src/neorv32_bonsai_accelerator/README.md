@@ -118,8 +118,14 @@ baseline for the subsequent `MEM_STREAM` implementation.
 
 `MEM_STREAM` uses role-indexed descriptors to move Q/K/V and output tiles
 between backing memory and the same attention engine. The simulation memory
-aperture is loaded before command timing and represents the board PSRAM
-controller boundary.
+aperture is loaded before command timing. Timed transfers use a behavioral
+model of the Gowin PSRAM HS controller's user-side interface configured for the
+Tang Nano 9K: physical DQ16, 64-bit user beats, BL16 bursts, a fixed-latency
+setting of six, and a 14-user-clock minimum command interval. The controller
+user clock shares the 27 MHz system-clock domain, corresponding to a 54 MHz
+memory clock at the IP's 1:2 ratio. Initialization gates requests before fixture
+execution; physical pins and electrical timing remain outside this
+controller-level simulation.
 
 ```sh
 python3 src/neorv32_bonsai_accelerator/evaluate-attention-kv-mem-stream.py
@@ -131,9 +137,9 @@ command-cycle and frontend-wait comparisons with CPU push.
 
 | Profile | `CPU_PUSH` command | `MEM_STREAM` command | Frontend speedup | Input-wait reduction | Output-wait reduction |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Board, H1/KVH1/D32/C2 | 5,344 | 328 | 16.293x | 99.514% | 98.152% |
-| Bonsai GQA, H2/KVH1/D16/C2 | 4,756 | 290 | 16.400x | 98.668% | 99.254% |
+| Board, H1/KVH1/D32/C2 | 5,344 | 506 | 10.561x | 96.577% | 95.958% |
+| Bonsai GQA, H2/KVH1/D16/C2 | 4,756 | 390 | 12.195x | 95.339% | 98.788% |
 
-Both profiles preserve the CPU-push checksum, traffic volume, and useful-work
-count. These figures use the always-ready simulation backing-memory model;
-physical PSRAM latency and controller behavior belong to board integration.
+Both profiles preserve the CPU-push fixtures, checksums, traffic volume, useful
+work, and timing boundaries. The controller-derived MEM_STREAM path retains a
+clear 10.6x to 12.2x gain over CPU push.

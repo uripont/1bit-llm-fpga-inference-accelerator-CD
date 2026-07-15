@@ -26,7 +26,7 @@ SUCCESS_PATTERN=evaluation_status=PASS \
 /workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_debug_auth.vhd:67:3:@0ms:(assertion warning): [NEORV32] Using DEFAULT on-chip debugger authenticator. Replace by custom module.
 /workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_top.vhd:384:5:@0ms:(assertion note): [NEORV32] The NEORV32 RISC-V Processor (v01.13.02.00), github.com/stnolting/neorv32
 /workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_top.vhd:393:5:@0ms:(assertion note): [NEORV32] Processor Configuration: CPU (single-core) IMEM-ROM DMEM I-CACHE D-CACHE XBUS CLINT GPIO UART0 UART1 SPI SDI TWI TWD PWM WDT TRNG CFS NEOLED GPTMR ONEWIRE DMA SLINK SYSINFO TRACER OCD OCD-AUTH OCD-HWBP 
-[progress] Proposal B CPU_PUSH board evaluation: 30s elapsed
+[progress] Proposal B CPU_PUSH board evaluation: 31s elapsed
 /workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_top.vhd:429:5:@0ms:(assertion warning): [NEORV32] Assuming this is a simulation.
 /workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_top.vhd:441:5:@0ms:(assertion note): [NEORV32] BOOT_MODE_SELECT 2 - booting IMEM image
 kernel=attention_kv_engine
