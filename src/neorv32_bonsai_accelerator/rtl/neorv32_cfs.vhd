@@ -114,6 +114,13 @@ begin
       if (heads_v = 0) or (kv_heads_v = 0) or (head_dim_v = 0) or
          (context_v = 0) or (append_v >= context_v) then
         service_config_valid <= '0';
+      elsif (kv_heads_v > ATTN_MAX_KV_HEADS_C) or
+            (head_dim_v > ATTN_MAX_HEAD_DIM_C) or
+            (context_v > ATTN_SCORE_CAPACITY_C) then
+        service_config_valid <= '0';
+      elsif (head_dim_v /= 16) and (head_dim_v /= 32) and
+            (head_dim_v /= 64) and (head_dim_v /= 128) then
+        service_config_valid <= '0';
       elsif (heads_v mod kv_heads_v) /= 0 then
         service_config_valid <= '0';
       elsif (segments_v > 65536 / heads_v) or

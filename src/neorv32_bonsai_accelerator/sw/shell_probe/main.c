@@ -351,6 +351,60 @@ static uint32_t expected_attention_head_checksum(
   return checksum;
 }
 
+static int32_t attention_inv_sqrt_q16(unsigned int head_dim) {
+  switch (head_dim) {
+    case 16: return 16384;
+    case 32: return 11585;
+    case 64: return 8192;
+    case 128: return 5793;
+    default: return 0;
+  }
+}
+
+static int16_t attention_fixture_element(unsigned int role,
+                                         unsigned int tile,
+                                         unsigned int element_in_segment) {
+  const uint32_t packed =
+      attention_fixture_word(role, tile, element_in_segment / 2u);
+  return element_in_segment & 1u
+             ? (int16_t)(packed >> 16)
+             : (int16_t)(packed & 0xffffu);
+}
+
+static uint32_t expected_attention_score_checksum(
+    const struct attention_profile *profile, unsigned int selected_head) {
+  const unsigned int segments = attention_segments(profile->head_dim);
+  const unsigned int mapped_kv_head =
+      selected_head * profile->kv_heads / profile->heads;
+  uint32_t checksum = 0;
+
+  for (unsigned int position = 0; position < profile->context; ++position) {
+    int64_t dot = 0;
+    for (unsigned int element = 0; element < profile->head_dim; ++element) {
+      const unsigned int segment =
+          element / BONSAI_ATTN_VECTOR_TILE_ELEMENTS;
+      const unsigned int element_in_segment =
+          element % BONSAI_ATTN_VECTOR_TILE_ELEMENTS;
+      const unsigned int query_tile = selected_head * segments + segment;
+      const unsigned int k_role = position == profile->append_position
+                                      ? BONSAI_ROLE_CURRENT_K
+                                      : BONSAI_ROLE_K_CACHE;
+      const unsigned int k_tile = position == profile->append_position
+          ? mapped_kv_head * segments + segment
+          : (mapped_kv_head * profile->context + position) * segments + segment;
+      const int32_t query = attention_fixture_element(
+          BONSAI_ROLE_QUERY, query_tile, element_in_segment);
+      const int32_t key = attention_fixture_element(
+          k_role, k_tile, element_in_segment);
+      dot += (int64_t)query * key;
+    }
+    const int64_t scaled =
+        (dot * attention_inv_sqrt_q16(profile->head_dim)) >> 16;
+    checksum ^= (uint32_t)scaled ^ (uint32_t)((uint64_t)scaled >> 32);
+  }
+  return checksum;
+}
+
 static uint32_t expected_attention_output_hash(
     const struct attention_profile *profile) {
   const unsigned int segments = attention_segments(profile->head_dim);
@@ -377,6 +431,7 @@ static uint32_t expected_attention_output_hash(
 
 static int run_attention_probe(const struct attention_profile *profile,
                                struct command_metrics *metrics) {
+  uint32_t expected_head_output[2];
   const unsigned int segments = attention_segments(profile->head_dim);
   const unsigned int vector_words = (profile->head_dim + 1u) / 2u;
   const unsigned int input_transactions =
@@ -398,6 +453,14 @@ static int run_attention_probe(const struct attention_profile *profile,
       profile->heads, profile->kv_heads, profile->head_dim);
   const uint32_t context = bonsai_accel_attention_context(
       profile->context, profile->append_position);
+
+  if (profile->heads > 2u) return 0;
+  for (unsigned int head = 0; head < profile->heads; ++head) {
+    expected_head_output[head] =
+        expected_attention_head_checksum(profile, head) ^
+        expected_attention_score_checksum(profile, head) ^
+        ((uint32_t)head << 24);
+  }
 
   bonsai_accel_write(BONSAI_REG_ATTN_HEADS_DIM, heads_dim);
   bonsai_accel_write(BONSAI_REG_ATTN_CONTEXT, context);
@@ -455,8 +518,7 @@ static int run_attention_probe(const struct attention_profile *profile,
         if (tile >= profile->kv_heads * segments) return 0;
         expected = attention_fixture_word(role, tile, output_word);
       } else if (role == BONSAI_ROLE_OUTPUT && head < profile->heads) {
-        expected = expected_attention_head_checksum(profile, head) ^
-                   ((uint32_t)head << 24) ^
+        expected = expected_head_output[head] ^
                    ((uint32_t)segment << 16) ^ output_word;
       } else {
         return 0;
@@ -483,7 +545,8 @@ static int run_attention_probe(const struct attention_profile *profile,
   read_metrics(metrics);
   const int valid = metrics_are_classified(metrics) &&
                     metrics->active_cycles ==
-                        input_words + output_words + profile->heads &&
+                        input_words + output_words + profile->heads +
+                        profile->heads * vector_words &&
                     metrics->input_wait_cycles != 0 &&
                     metrics->output_wait_cycles == 0 &&
                     metrics->input_bytes == input_words * sizeof(uint32_t) &&
@@ -563,6 +626,24 @@ int main(void) {
     return 1;
   }
 
+  neorv32_uart0_printf("probe_phase=attention_board\n");
+  if (!run_attention_probe(&attention_board, &attention_board_metrics)) {
+    neorv32_uart0_printf("shell_probe=FAIL reason=attention_board\n");
+    return 1;
+  }
+
+  neorv32_uart0_printf("probe_phase=attention_gqa\n");
+  if (!run_attention_probe(&attention_gqa, &attention_gqa_metrics)) {
+    neorv32_uart0_printf("shell_probe=FAIL reason=attention_gqa\n");
+    return 1;
+  }
+
+  neorv32_uart0_printf("probe_phase=attention_reject\n");
+  if (!rejects_bad_attention_shape()) {
+    neorv32_uart0_printf("shell_probe=FAIL reason=attention_reject\n");
+    return 1;
+  }
+
   const int16_t base_reference = q1_fixture_reference_result_from_q8(
       Q1_FIXTURE_WEIGHT_SCALE_FIXED_Q8, Q1_FIXTURE_Q8_SCALE_Q16,
       Q1_FIXTURE_SIGN_WORD);
@@ -571,6 +652,8 @@ int main(void) {
       Q1_FIXTURE_SIGN_WORD);
   const int16_t bonsai_row_reference =
       q1_fixture_bonsai_reference_result(0, Q1_FIXTURE_BONSAI_GROUPS);
+
+  neorv32_uart0_printf("probe_phase=q1\n");
   if (base_reference != 64 || saturation_reference != 32767 ||
       !run_q1_arithmetic(
           Q1_FIXTURE_FIXED, Q1_FIXTURE_ROWS, Q1_FIXTURE_GROUPS,
@@ -590,11 +673,8 @@ int main(void) {
       !run_q1_arithmetic(
           Q1_FIXTURE_BONSAI_ROW, Q1_FIXTURE_MULTI_ROWS,
           Q1_FIXTURE_MULTI_GROUPS, BONSAI_Q1_SCALE_FP16, 0, 0, 0,
-          &q1_multi_row_metrics, q1_multi_row_output) ||
-      !run_attention_probe(&attention_board, &attention_board_metrics) ||
-      !run_attention_probe(&attention_gqa, &attention_gqa_metrics) ||
-      !rejects_bad_attention_shape()) {
-    neorv32_uart0_printf("shell_probe=FAIL reason=cpu_push\n");
+          &q1_multi_row_metrics, q1_multi_row_output)) {
+    neorv32_uart0_printf("shell_probe=FAIL reason=q1\n");
     return 1;
   }
 

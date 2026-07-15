@@ -16,4 +16,4 @@ include $(NEORV32_HOME)/sw/common/common.mk
 
 .PHONY: shell-sim
 shell-sim: $(APP_VHD)
-	STOP_TIME=20ms ../../sim/run-ghdl.sh "$(CURDIR)/$(APP_VHD)"
+	STOP_TIME=30ms ../../sim/run-ghdl.sh "$(CURDIR)/$(APP_VHD)"

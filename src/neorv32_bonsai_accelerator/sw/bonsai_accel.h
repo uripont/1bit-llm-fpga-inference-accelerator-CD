@@ -138,6 +138,9 @@ enum bonsai_accel_q1_scale_format {
  * consecutive tiles; the final transaction carries its valid word count. */
 #define BONSAI_ATTN_VECTOR_TILE_ELEMENTS 32u
 #define BONSAI_ATTN_VECTOR_TILE_WORDS 16u
+#define BONSAI_ATTN_MAX_HEAD_DIM 128u
+#define BONSAI_ATTN_MAX_KV_HEADS 8u
+#define BONSAI_ATTN_SCORE_CAPACITY 256u
 
 static inline uint32_t bonsai_accel_read(unsigned int reg) {
   return NEORV32_CFS->REG[reg];
