@@ -62,14 +62,14 @@ architecture bonsai_accel_rtl of neorv32_cfs is
   signal q1_active, q1_input_wait, q1_output_wait : std_ulogic;
   signal q1_work : std_ulogic_vector(31 downto 0);
 
-  signal test_transaction_valid, test_transaction_ready, test_transaction_direction : std_ulogic;
-  signal test_transaction_role : tile_role_t;
-  signal test_transaction_tile, test_transaction_length : std_ulogic_vector(15 downto 0);
-  signal test_input_valid, test_input_ready, test_output_valid, test_output_ready : std_ulogic;
-  signal test_input_data, test_output_data : std_ulogic_vector(31 downto 0);
-  signal test_launch, test_busy, test_done, test_error : std_ulogic;
-  signal test_active, test_input_wait, test_output_wait : std_ulogic;
-  signal test_work : std_ulogic_vector(31 downto 0);
+  signal attn_transaction_valid, attn_transaction_ready, attn_transaction_direction : std_ulogic;
+  signal attn_transaction_role : tile_role_t;
+  signal attn_transaction_tile, attn_transaction_length : std_ulogic_vector(15 downto 0);
+  signal attn_input_valid, attn_input_ready, attn_output_valid, attn_output_ready : std_ulogic;
+  signal attn_input_data, attn_output_data : std_ulogic_vector(31 downto 0);
+  signal attn_launch, attn_busy, attn_done, attn_error : std_ulogic;
+  signal attn_active, attn_input_wait, attn_output_wait : std_ulogic;
+  signal attn_work : std_ulogic_vector(31 downto 0);
 
   signal stream_transaction_valid, stream_transaction_ready : std_ulogic;
   signal stream_transaction_direction : std_ulogic;
@@ -100,6 +100,7 @@ begin
   shape_validation : process(all)
     variable heads_v, kv_heads_v : natural;
     variable head_dim_v, context_v, append_v : natural;
+    variable segments_v, kv_tiles_per_position_v : natural;
   begin
     service_config_valid <= '1';
     if selected_service = SERVICE_ATTN_KV_C then
@@ -108,11 +109,21 @@ begin
       head_dim_v := to_integer(unsigned(config_attn_head_dim));
       context_v := to_integer(unsigned(config_attn_context_length));
       append_v := to_integer(unsigned(config_attn_append_position));
+      segments_v := (head_dim_v + ATTN_VECTOR_TILE_ELEMENTS_C - 1) /
+                    ATTN_VECTOR_TILE_ELEMENTS_C;
       if (heads_v = 0) or (kv_heads_v = 0) or (head_dim_v = 0) or
          (context_v = 0) or (append_v >= context_v) then
         service_config_valid <= '0';
       elsif (heads_v mod kv_heads_v) /= 0 then
         service_config_valid <= '0';
+      elsif (segments_v > 65536 / heads_v) or
+            (segments_v > 65536 / kv_heads_v) then
+        service_config_valid <= '0';
+      else
+        kv_tiles_per_position_v := kv_heads_v * segments_v;
+        if context_v > 65536 / kv_tiles_per_position_v then
+          service_config_valid <= '0';
+        end if;
       end if;
     end if;
   end process shape_validation;
@@ -121,42 +132,42 @@ begin
                     not engine_input_wait and not engine_output_wait;
 
   q1_launch <= engine_launch when selected_service = SERVICE_Q1_MATVEC_C else '0';
-  test_launch <= engine_launch when selected_service = SERVICE_ATTN_KV_C else '0';
+  attn_launch <= engine_launch when selected_service = SERVICE_ATTN_KV_C else '0';
 
   transaction_valid <= q1_transaction_valid when selected_service = SERVICE_Q1_MATVEC_C
-    else test_transaction_valid;
+    else attn_transaction_valid;
   transaction_direction <= q1_transaction_direction when selected_service = SERVICE_Q1_MATVEC_C
-    else test_transaction_direction;
+    else attn_transaction_direction;
   transaction_role <= q1_transaction_role when selected_service = SERVICE_Q1_MATVEC_C
-    else test_transaction_role;
+    else attn_transaction_role;
   transaction_tile <= q1_transaction_tile when selected_service = SERVICE_Q1_MATVEC_C
-    else test_transaction_tile;
+    else attn_transaction_tile;
   transaction_length <= q1_transaction_length when selected_service = SERVICE_Q1_MATVEC_C
-    else test_transaction_length;
+    else attn_transaction_length;
   q1_transaction_ready <= transaction_ready when selected_service = SERVICE_Q1_MATVEC_C else '0';
-  test_transaction_ready <= transaction_ready when selected_service = SERVICE_ATTN_KV_C else '0';
+  attn_transaction_ready <= transaction_ready when selected_service = SERVICE_ATTN_KV_C else '0';
 
   q1_input_valid <= engine_input_valid when selected_service = SERVICE_Q1_MATVEC_C else '0';
-  test_input_valid <= engine_input_valid when selected_service = SERVICE_ATTN_KV_C else '0';
+  attn_input_valid <= engine_input_valid when selected_service = SERVICE_ATTN_KV_C else '0';
   q1_input_data <= engine_input_data;
-  test_input_data <= engine_input_data;
+  attn_input_data <= engine_input_data;
   engine_input_ready <= q1_input_ready when selected_service = SERVICE_Q1_MATVEC_C
-    else test_input_ready;
+    else attn_input_ready;
 
   engine_output_valid <= q1_output_valid when selected_service = SERVICE_Q1_MATVEC_C
-    else test_output_valid;
+    else attn_output_valid;
   engine_output_data <= q1_output_data when selected_service = SERVICE_Q1_MATVEC_C
-    else test_output_data;
+    else attn_output_data;
   q1_output_ready <= engine_output_ready when selected_service = SERVICE_Q1_MATVEC_C else '0';
-  test_output_ready <= engine_output_ready when selected_service = SERVICE_ATTN_KV_C else '0';
+  attn_output_ready <= engine_output_ready when selected_service = SERVICE_ATTN_KV_C else '0';
 
-  engine_busy <= q1_busy when selected_service = SERVICE_Q1_MATVEC_C else test_busy;
-  engine_done <= q1_done when selected_service = SERVICE_Q1_MATVEC_C else test_done;
-  engine_error <= q1_error when selected_service = SERVICE_Q1_MATVEC_C else test_error;
-  engine_active <= q1_active when selected_service = SERVICE_Q1_MATVEC_C else test_active;
-  engine_input_wait <= q1_input_wait when selected_service = SERVICE_Q1_MATVEC_C else test_input_wait;
-  engine_output_wait <= q1_output_wait when selected_service = SERVICE_Q1_MATVEC_C else test_output_wait;
-  engine_work <= q1_work when selected_service = SERVICE_Q1_MATVEC_C else test_work;
+  engine_busy <= q1_busy when selected_service = SERVICE_Q1_MATVEC_C else attn_busy;
+  engine_done <= q1_done when selected_service = SERVICE_Q1_MATVEC_C else attn_done;
+  engine_error <= q1_error when selected_service = SERVICE_Q1_MATVEC_C else attn_error;
+  engine_active <= q1_active when selected_service = SERVICE_Q1_MATVEC_C else attn_active;
+  engine_input_wait <= q1_input_wait when selected_service = SERVICE_Q1_MATVEC_C else attn_input_wait;
+  engine_output_wait <= q1_output_wait when selected_service = SERVICE_Q1_MATVEC_C else attn_output_wait;
+  engine_work <= q1_work when selected_service = SERVICE_Q1_MATVEC_C else attn_work;
 
   reg_file_inst : entity neorv32.cfs_reg_file
     port map (
@@ -348,30 +359,35 @@ begin
       work_o => q1_work
     );
 
-  test_engine_inst : entity neorv32.shell_test_engine
+  attn_engine_inst : entity neorv32.attn_kv_engine
     port map (
       clk_i => clk_i,
       rstn_i => rstn_i,
-      launch_i => test_launch,
-      transaction_valid_o => test_transaction_valid,
-      transaction_ready_i => test_transaction_ready,
-      transaction_direction_o => test_transaction_direction,
-      transaction_role_o => test_transaction_role,
-      transaction_tile_o => test_transaction_tile,
-      transaction_length_o => test_transaction_length,
-      input_valid_i => test_input_valid,
-      input_ready_o => test_input_ready,
-      input_data_i => test_input_data,
-      output_valid_o => test_output_valid,
-      output_ready_i => test_output_ready,
-      output_data_o => test_output_data,
-      busy_o => test_busy,
-      done_o => test_done,
-      error_o => test_error,
-      active_o => test_active,
-      input_wait_o => test_input_wait,
-      output_wait_o => test_output_wait,
-      work_o => test_work
+      launch_i => attn_launch,
+      heads_i => config_attn_heads,
+      kv_heads_i => config_attn_kv_heads,
+      head_dim_i => config_attn_head_dim,
+      context_length_i => config_attn_context_length,
+      append_position_i => config_attn_append_position,
+      transaction_valid_o => attn_transaction_valid,
+      transaction_ready_i => attn_transaction_ready,
+      transaction_direction_o => attn_transaction_direction,
+      transaction_role_o => attn_transaction_role,
+      transaction_tile_o => attn_transaction_tile,
+      transaction_length_o => attn_transaction_length,
+      input_valid_i => attn_input_valid,
+      input_ready_o => attn_input_ready,
+      input_data_i => attn_input_data,
+      output_valid_o => attn_output_valid,
+      output_ready_i => attn_output_ready,
+      output_data_o => attn_output_data,
+      busy_o => attn_busy,
+      done_o => attn_done,
+      error_o => attn_error,
+      active_o => attn_active,
+      input_wait_o => attn_input_wait,
+      output_wait_o => attn_output_wait,
+      work_o => attn_work
     );
 
   counters_inst : entity neorv32.counter_block

@@ -38,7 +38,7 @@ done < <(find "${NEORV32_ROOT}/rtl/core" -type f -name '*.vhd' \
   "${RTL_DIR}/frontend_control.vhd" \
   "${RTL_DIR}/stream_frontend.vhd" \
   "${RTL_DIR}/q1_matvec_engine.vhd" \
-  "${RTL_DIR}/shell_test_engine.vhd" \
+  "${RTL_DIR}/attn_kv_engine.vhd" \
   "${RTL_DIR}/neorv32_cfs.vhd" \
   "${APP_IMAGE}"
 

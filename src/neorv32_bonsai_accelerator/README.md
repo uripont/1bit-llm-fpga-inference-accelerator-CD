@@ -9,7 +9,11 @@ shared register map, service and transfer identifiers, semantic tile roles,
 command lifecycle, and per-command counters. The attention service contract
 adds query-head, KV-head, head-dimension, context-length, and append-position
 configuration, with signed-16 vectors split into indexed 32-element tiles.
-Proposal A now has a board-sized
+The attention/KV transaction skeleton follows append-first ordering, maps query
+heads to grouped-query KV heads, returns current K/V as append-writeback tiles,
+traverses historical K and V tiles, and emits deterministic placeholder
+attention outputs for transport validation. Attention
+arithmetic remains a subsequent stage. Proposal A now has a board-sized
 transport contract for Q1_0 by Q8_0 rows. The matvec engine streams configured
 rows of 128-element groups, reduces 32 sign-controlled Q8 lanes per block,
 applies the Q1 and Q8 scales in separate pipeline stages, preserves a 64-bit
@@ -20,8 +24,8 @@ for every row; activation reuse is deferred to the future `MEM_STREAM` path.
 The `CPU_PUSH` frontend provides independent ingress and egress FIFOs, request metadata,
 backpressure, physical-byte counters, and frontend wait counters. Local tile
 buffers stage complete role-tagged input and output transactions between the
-FIFOs and engine. The attention/KV engine and `MEM_STREAM` remain subsequent
-stages; `MEM_STREAM` currently terminates with an unsupported-mode error.
+FIFOs and engine. `MEM_STREAM` remains a subsequent stage and currently
+terminates with an unsupported-mode error.
 
 ## Validate the CFS integration
 
@@ -37,8 +41,9 @@ with the project CFS implementation, and checks for `shell_probe=PASS` in the
 simulated UART output. The probe runs both service selections, validates the
 Q1/Q8 tile sequence and deterministic fixtures, including a 16-group,
 2048-element row and a multi-row command, checks counter identity and FIFO
-payloads, acknowledges repeated commands, checks the attention compatibility
-shape and invalid-shape rejection, and checks the current `MEM_STREAM` error
+payloads, acknowledges repeated commands, checks both attention compatibility
+shapes, their role-tagged tile sequences, GQA mapping and invalid-shape
+rejection, and checks the current `MEM_STREAM` error
 behavior. The two-word FIFOs exercise CPU-side backpressure, while local
 tiles keep the engines independent of CPU drain timing.
 
