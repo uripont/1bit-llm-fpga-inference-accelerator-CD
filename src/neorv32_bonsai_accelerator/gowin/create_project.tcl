@@ -6,7 +6,7 @@ set repo_dir [file normalize [file join $script_dir ../../..]]
 if {![info exists bonsai_profile]} {
   set bonsai_profile proposal_a
 }
-if {$bonsai_profile ni {proposal_a combined}} {
+if {$bonsai_profile ni {proposal_a proposal_b_cpu_push combined}} {
   error "unsupported bonsai_profile: $bonsai_profile"
 }
 set project_name bonsai_tang_nano_9k_${bonsai_profile}
@@ -49,6 +49,8 @@ foreach source $accel_sources {
 
 if {$bonsai_profile eq "proposal_a"} {
   set cfs_wrapper [file join $script_dir neorv32_cfs_proposal_a.vhd]
+} elseif {$bonsai_profile eq "proposal_b_cpu_push"} {
+  set cfs_wrapper [file join $script_dir neorv32_cfs_proposal_b.vhd]
 } else {
   set cfs_wrapper [file join $accel_dir neorv32_cfs.vhd]
 }
@@ -57,7 +59,12 @@ set_file_prop -lib neorv32 [file join $project_dir src [file tail $cfs_wrapper]]
 
 import_files -file [file join $script_dir stream_memory_boundary.vhd] -force
 set_file_prop -lib neorv32 [file join $project_dir src stream_memory_boundary.vhd]
-import_files -file [file join $script_dir bonsai_tang_nano_9k_top.vhd] -force
+if {$bonsai_profile eq "proposal_b_cpu_push"} {
+  set board_top [file join $script_dir bonsai_tang_nano_9k_proposal_b_top.vhd]
+} else {
+  set board_top [file join $script_dir bonsai_tang_nano_9k_top.vhd]
+}
+import_files -file $board_top -force
 import_files -file [file join $repo_dir neorv32-setups gowineda tang-nano-9k tang-nano-9k_test_setup_bootloader.cst] -force
 import_files -file [file join $script_dir tang_nano_9k.sdc] -force
 

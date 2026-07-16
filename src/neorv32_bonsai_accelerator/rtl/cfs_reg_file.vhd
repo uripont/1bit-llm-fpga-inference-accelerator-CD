@@ -9,6 +9,9 @@ use neorv32.neorv32_package.all;
 use neorv32.bonsai_accel_pkg.all;
 
 entity cfs_reg_file is
+  generic (
+    ENABLE_MEM_STREAM_G : boolean := true
+  );
   port (
     clk_i     : in  std_ulogic;
     rstn_i    : in  std_ulogic;
@@ -102,41 +105,53 @@ begin
   attn_append_position_o <=
     attn_context_reg(ATTN_APPEND_POSITION_MSB_C downto ATTN_APPEND_POSITION_LSB_C);
 
-  descriptor_lookup : process(all)
-    variable role_v : natural range 0 to DESCRIPTOR_COUNT_C - 1;
-  begin
-    role_v := to_integer(unsigned(descriptor_role_i));
-    descriptor_length_o <= descriptor_length(role_v);
-    descriptor_base_o <= descriptor_base(role_v);
-    descriptor_stride_o <= descriptor_stride(role_v);
-    descriptor_valid_o <= descriptor_valid_mask(role_v);
-  end process descriptor_lookup;
-  descriptor_valid_mask_o <= descriptor_valid_mask;
+  mem_stream_registers_g : if ENABLE_MEM_STREAM_G generate
+    descriptor_lookup : process(all)
+      variable role_v : natural range 0 to DESCRIPTOR_COUNT_C - 1;
+    begin
+      role_v := to_integer(unsigned(descriptor_role_i));
+      descriptor_length_o <= descriptor_length(role_v);
+      descriptor_base_o <= descriptor_base(role_v);
+      descriptor_stride_o <= descriptor_stride(role_v);
+      descriptor_valid_o <= descriptor_valid_mask(role_v);
+    end process descriptor_lookup;
 
-  descriptor_validation : process(all)
-  begin
-    for i in 0 to DESCRIPTOR_COUNT_C - 1 loop
-      if (unsigned(descriptor_length(i)) /= 0) and
-         (unsigned(descriptor_stride(i)) /= 0) and
-         (descriptor_base(i)(1 downto 0) = "00") and
-         (descriptor_stride(i)(1 downto 0) = "00") then
-        descriptor_valid_mask(i) <= '1';
-      else
-        descriptor_valid_mask(i) <= '0';
+    descriptor_validation : process(all)
+    begin
+      for i in 0 to DESCRIPTOR_COUNT_C - 1 loop
+        if (unsigned(descriptor_length(i)) /= 0) and
+           (unsigned(descriptor_stride(i)) /= 0) and
+           (descriptor_base(i)(1 downto 0) = "00") and
+           (descriptor_stride(i)(1 downto 0) = "00") then
+          descriptor_valid_mask(i) <= '1';
+        else
+          descriptor_valid_mask(i) <= '0';
+        end if;
+      end loop;
+    end process descriptor_validation;
+
+    memory_address : process(all)
+      variable word_addr_v : natural range 0 to 16383;
+    begin
+      word_addr_v := to_integer(unsigned(bus_req_i.addr(15 downto 2)));
+      memory_cpu_address_o <= (others => '0');
+      if word_addr_v >= MEM_WINDOW_BASE_WORD_C then
+        memory_cpu_address_o <= std_ulogic_vector(
+          to_unsigned(word_addr_v - MEM_WINDOW_BASE_WORD_C, 14));
       end if;
-    end loop;
-  end process descriptor_validation;
+    end process memory_address;
+  end generate mem_stream_registers_g;
 
-  memory_address : process(all)
-    variable word_addr_v : natural range 0 to 16383;
-  begin
-    word_addr_v := to_integer(unsigned(bus_req_i.addr(15 downto 2)));
+  cpu_push_registers_g : if not ENABLE_MEM_STREAM_G generate
+    descriptor_length_o <= (others => '0');
+    descriptor_base_o <= (others => '0');
+    descriptor_stride_o <= (others => '0');
+    descriptor_valid_o <= '0';
+    descriptor_valid_mask <= (others => '0');
+    descriptor_select <= 0;
     memory_cpu_address_o <= (others => '0');
-    if word_addr_v >= MEM_WINDOW_BASE_WORD_C then
-      memory_cpu_address_o <= std_ulogic_vector(
-        to_unsigned(word_addr_v - MEM_WINDOW_BASE_WORD_C, 14));
-    end if;
-  end process memory_address;
+  end generate cpu_push_registers_g;
+  descriptor_valid_mask_o <= descriptor_valid_mask;
   memory_cpu_data_o <= bus_req_i.data;
 
   bus_access : process(rstn_i, clk_i)
@@ -152,12 +167,14 @@ begin
       matvec_shape_reg <= (others => '0');
       attn_heads_dim_reg <= (others => '0');
       attn_context_reg <= (others => '0');
-      descriptor_select <= 0;
-      for i in 0 to DESCRIPTOR_COUNT_C - 1 loop
-        descriptor_length(i) <= (others => '0');
-        descriptor_base(i) <= (others => '0');
-        descriptor_stride(i) <= (others => '0');
-      end loop;
+      if ENABLE_MEM_STREAM_G then
+        descriptor_select <= 0;
+        for i in 0 to DESCRIPTOR_COUNT_C - 1 loop
+          descriptor_length(i) <= (others => '0');
+          descriptor_base(i) <= (others => '0');
+          descriptor_stride(i) <= (others => '0');
+        end loop;
+      end if;
       start_o      <= '0';
       acknowledge_o <= '0';
       fifo_input_write_o <= '0';
@@ -189,7 +206,11 @@ begin
                   config_reg <= (others => '0');
                   config_reg(CONFIG_SERVICE_MSB_C downto CONFIG_SERVICE_LSB_C) <=
                     bus_req_i.data(CONFIG_SERVICE_MSB_C downto CONFIG_SERVICE_LSB_C);
-                  config_reg(CONFIG_TRANSFER_BIT_C) <= bus_req_i.data(CONFIG_TRANSFER_BIT_C);
+                  if ENABLE_MEM_STREAM_G then
+                    config_reg(CONFIG_TRANSFER_BIT_C) <= bus_req_i.data(CONFIG_TRANSFER_BIT_C);
+                  else
+                    config_reg(CONFIG_TRANSFER_BIT_C) <= TRANSFER_CPU_PUSH_C;
+                  end if;
                   config_reg(CONFIG_Q1_SCALE_FIXED_BIT_C) <=
                     bus_req_i.data(CONFIG_Q1_SCALE_FIXED_BIT_C);
                 end if;
@@ -206,27 +227,28 @@ begin
                   attn_context_reg <= bus_req_i.data;
                 end if;
               when REG_DESC_SELECT_C =>
-                if (busy_i = '0') and
+                if ENABLE_MEM_STREAM_G and (busy_i = '0') and
                    (unsigned(bus_req_i.data) < DESCRIPTOR_COUNT_C) then
                   descriptor_select <= to_integer(unsigned(bus_req_i.data(3 downto 0)));
                 end if;
               when REG_DESC_LENGTH_C =>
-                if busy_i = '0' then
+                if ENABLE_MEM_STREAM_G and busy_i = '0' then
                   descriptor_length(descriptor_select) <= bus_req_i.data;
                 end if;
               when REG_DESC_BASE_C =>
-                if busy_i = '0' then
+                if ENABLE_MEM_STREAM_G and busy_i = '0' then
                   descriptor_base(descriptor_select) <= bus_req_i.data;
                 end if;
               when REG_DESC_STRIDE_C =>
-                if busy_i = '0' then
+                if ENABLE_MEM_STREAM_G and busy_i = '0' then
                   descriptor_stride(descriptor_select) <= bus_req_i.data;
                 end if;
               when REG_FIFO_IN_C =>
                 fifo_input_data_o  <= bus_req_i.data;
                 fifo_input_write_o <= '1';
               when others =>
-                if (word_addr_v >= MEM_WINDOW_BASE_WORD_C) and
+                if ENABLE_MEM_STREAM_G and
+                   (word_addr_v >= MEM_WINDOW_BASE_WORD_C) and
                    (word_addr_v < MEM_WINDOW_BASE_WORD_C + MEM_WINDOW_WORDS_C) and
                    (busy_i = '0') then
                   memory_cpu_write_o <= '1';
@@ -257,13 +279,21 @@ begin
             when REG_ATTN_CONTEXT_C =>
               bus_rsp_o.data <= attn_context_reg;
             when REG_DESC_SELECT_C =>
-              bus_rsp_o.data <= std_ulogic_vector(to_unsigned(descriptor_select, 32));
+              if ENABLE_MEM_STREAM_G then
+                bus_rsp_o.data <= std_ulogic_vector(to_unsigned(descriptor_select, 32));
+              end if;
             when REG_DESC_LENGTH_C =>
-              bus_rsp_o.data <= descriptor_length(descriptor_select);
+              if ENABLE_MEM_STREAM_G then
+                bus_rsp_o.data <= descriptor_length(descriptor_select);
+              end if;
             when REG_DESC_BASE_C =>
-              bus_rsp_o.data <= descriptor_base(descriptor_select);
+              if ENABLE_MEM_STREAM_G then
+                bus_rsp_o.data <= descriptor_base(descriptor_select);
+              end if;
             when REG_DESC_STRIDE_C =>
-              bus_rsp_o.data <= descriptor_stride(descriptor_select);
+              if ENABLE_MEM_STREAM_G then
+                bus_rsp_o.data <= descriptor_stride(descriptor_select);
+              end if;
             when REG_REQUEST_C =>
               request_v := (others => '0');
               request_v(REQUEST_INPUT_VALID_BIT_C) := input_request_valid_i;
@@ -314,7 +344,8 @@ begin
             when REG_COUNTER_WORK_C =>
               bus_rsp_o.data <= counter_work_i;
             when others =>
-              if (word_addr_v >= MEM_WINDOW_BASE_WORD_C) and
+              if ENABLE_MEM_STREAM_G and
+                 (word_addr_v >= MEM_WINDOW_BASE_WORD_C) and
                  (word_addr_v < MEM_WINDOW_BASE_WORD_C + MEM_WINDOW_WORDS_C) then
                 bus_rsp_o.data <= memory_cpu_data_i;
               else

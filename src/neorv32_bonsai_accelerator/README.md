@@ -108,12 +108,12 @@ evaluation produced:
 
 | Profile | Tier 3 software | `CPU_PUSH` command | Engine active | Command speedup | Active-cycle speedup |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Board, H1/KVH1/D32/C2 | 489,007 | 5,344 | 166 | 91.506x | 2,945.825x |
-| Bonsai GQA, H2/KVH1/D16/C2 | 494,741 | 4,756 | 140 | 104.025x | 3,533.864x |
+| Board, H1/KVH1/D32/C2 | 489,007 | 5,453 | 398 | 89.677x | 1,228.661x |
+| Bonsai GQA, H2/KVH1/D16/C2 | 494,741 | 4,874 | 412 | 101.506x | 1,200.828x |
 
 Both outputs match the Tier 3 checksums, 5,274 and 7,569. The compute engine is
-therefore complete under `CPU_PUSH`, but utilization remains 3.787% for board
-and 3.326% for GQA because the engine spends most elapsed cycles waiting for
+therefore complete under `CPU_PUSH`, but utilization remains 8.707% for board
+and 9.383% for GQA because the engine spends most elapsed cycles waiting for
 CPU-provided input. These results establish the straightforward hardware
 baseline for the subsequent `MEM_STREAM` implementation.
 
@@ -136,13 +136,7 @@ python3 src/neorv32_bonsai_accelerator/evaluate-attention-kv-mem-stream.py
 
 Results are written under
 `results/proposal_b_evaluation/attention_kv/mem_stream/` and include direct
-command-cycle and frontend-wait comparisons with CPU push.
-
-| Profile | `CPU_PUSH` command | `MEM_STREAM` command | Frontend speedup | Input-wait reduction | Output-wait reduction |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Board, H1/KVH1/D32/C2 | 5,344 | 506 | 10.561x | 96.577% | 95.958% |
-| Bonsai GQA, H2/KVH1/D16/C2 | 4,756 | 390 | 12.195x | 95.339% | 98.788% |
-
-Both profiles preserve the CPU-push fixtures, checksums, traffic volume, useful
-work, and timing boundaries. The controller-derived MEM_STREAM path retains a
-clear 10.6x to 12.2x gain over CPU push.
+command-cycle and frontend-wait comparisons with CPU push. The committed
+MEM_STREAM results predate the final timing pipeline and will be regenerated
+with the dedicated MEM_STREAM synthesis profile before reporting the final
+frontend comparison.

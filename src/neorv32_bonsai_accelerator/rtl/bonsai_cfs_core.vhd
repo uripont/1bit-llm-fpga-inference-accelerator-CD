@@ -11,7 +11,9 @@ use neorv32.bonsai_accel_pkg.all;
 entity bonsai_cfs_core is
   generic (
     ENABLE_Q1_ENGINE_G   : boolean := true;
-    ENABLE_ATTN_ENGINE_G : boolean := true
+    ENABLE_ATTN_ENGINE_G : boolean := true;
+    ENABLE_MEM_STREAM_G  : boolean := true;
+    COUNTER_WIDTH_G      : positive range 1 to 32 := 32
   );
   port (
     clk_i     : in  std_ulogic;
@@ -122,46 +124,31 @@ begin
   shape_validation : process(all)
     variable heads_v, kv_heads_v : natural;
     variable head_dim_v, context_v, append_v : natural;
-    variable segments_v, kv_tiles_per_position_v : natural;
   begin
     service_config_valid <= '1';
-    kv_tiles_per_position_v := 0;
     if selected_service = SERVICE_ATTN_KV_C then
       heads_v := to_integer(unsigned(config_attn_heads));
       kv_heads_v := to_integer(unsigned(config_attn_kv_heads));
       head_dim_v := to_integer(unsigned(config_attn_head_dim));
       context_v := to_integer(unsigned(config_attn_context_length));
       append_v := to_integer(unsigned(config_attn_append_position));
-      segments_v := (head_dim_v + ATTN_VECTOR_TILE_ELEMENTS_C - 1) /
-                    ATTN_VECTOR_TILE_ELEMENTS_C;
-      if (heads_v = 0) or (kv_heads_v = 0) or (head_dim_v = 0) or
+      if (heads_v = 0) or (heads_v > ATTN_MAX_QUERY_HEADS_C) or
+         (kv_heads_v /= 1) or
          (context_v = 0) or (append_v >= context_v) then
         service_config_valid <= '0';
-      elsif (kv_heads_v > ATTN_MAX_KV_HEADS_C) or
-            (head_dim_v > ATTN_MAX_HEAD_DIM_C) or
-            (context_v > ATTN_SCORE_CAPACITY_C) then
+      elsif (context_v > ATTN_SCORE_CAPACITY_C) then
         service_config_valid <= '0';
-      elsif (head_dim_v /= 16) and (head_dim_v /= 32) and
-            (head_dim_v /= 64) and (head_dim_v /= 128) then
+      elsif (head_dim_v /= 16) and (head_dim_v /= 32) then
         service_config_valid <= '0';
-      elsif (heads_v mod kv_heads_v) /= 0 then
-        service_config_valid <= '0';
-      elsif (segments_v > 65536 / heads_v) or
-            (segments_v > 65536 / kv_heads_v) then
-        service_config_valid <= '0';
-      else
-        kv_tiles_per_position_v := kv_heads_v * segments_v;
-        if context_v > 65536 / kv_tiles_per_position_v then
-          service_config_valid <= '0';
-        end if;
       end if;
       if (selected_transfer = TRANSFER_MEM_STREAM_C) and
+         ((not ENABLE_MEM_STREAM_G) or
          ((descriptor_valid_mask(to_integer(unsigned(ROLE_QUERY_C))) = '0') or
           (descriptor_valid_mask(to_integer(unsigned(ROLE_CURRENT_K_C))) = '0') or
           (descriptor_valid_mask(to_integer(unsigned(ROLE_CURRENT_V_C))) = '0') or
           (descriptor_valid_mask(to_integer(unsigned(ROLE_K_CACHE_C))) = '0') or
           (descriptor_valid_mask(to_integer(unsigned(ROLE_V_CACHE_C))) = '0') or
-          (descriptor_valid_mask(to_integer(unsigned(ROLE_OUTPUT_C))) = '0')) then
+          (descriptor_valid_mask(to_integer(unsigned(ROLE_OUTPUT_C))) = '0'))) then
         service_config_valid <= '0';
       end if;
     end if;
@@ -236,6 +223,9 @@ begin
     when selected_transfer = TRANSFER_MEM_STREAM_C else '0';
 
   reg_file_inst : entity neorv32.cfs_reg_file
+    generic map (
+      ENABLE_MEM_STREAM_G => ENABLE_MEM_STREAM_G
+    )
     port map (
       clk_i => clk_i,
       rstn_i => rstn_i,
@@ -364,7 +354,7 @@ begin
 
   stream_frontend_inst : entity neorv32.stream_frontend
     generic map (
-      FIFO_DEPTH => 2
+      FIFO_DEPTH => 1
     )
     port map (
       clk_i => clk_i,
@@ -406,8 +396,9 @@ begin
       error_o => cpu_error
     );
 
-  memory_streamer_inst : entity neorv32.memory_streamer
-    port map (
+  mem_stream_enabled_g : if ENABLE_MEM_STREAM_G generate
+    memory_streamer_inst : entity neorv32.memory_streamer
+      port map (
       clk_i => clk_i, rstn_i => rstn_i, command_start_i => command_counter_start,
       head_dim_i => config_attn_head_dim,
       context_length_i => config_attn_context_length,
@@ -446,10 +437,10 @@ begin
       output_bytes_o => mem_output_bytes,
       idle_o => mem_idle,
       error_o => mem_error
-    );
+      );
 
-  stream_memory_inst : entity neorv32.stream_memory
-    port map (
+    stream_memory_inst : entity neorv32.stream_memory
+      port map (
       clk_i => clk_i,
       rstn_i => rstn_i,
       cpu_write_i => memory_cpu_write,
@@ -467,7 +458,33 @@ begin
       read_data_o => memory_read_data,
       read_valid_o => memory_read_valid,
       error_o => memory_error
-    );
+      );
+  end generate mem_stream_enabled_g;
+
+  mem_stream_disabled_g : if not ENABLE_MEM_STREAM_G generate
+    mem_transaction_ready <= '0';
+    mem_input_valid <= '0';
+    mem_input_data <= (others => '0');
+    mem_output_ready <= '0';
+    mem_idle <= '1';
+    mem_error <= '0';
+    mem_input_wait <= '0';
+    mem_output_wait <= '0';
+    mem_input_bytes <= (others => '0');
+    mem_output_bytes <= (others => '0');
+    descriptor_role <= ROLE_NONE_C;
+    memory_init_done <= '0';
+    memory_cmd_valid <= '0';
+    memory_cmd_write <= '0';
+    memory_cmd_address <= (others => '0');
+    memory_write_data <= (others => '0');
+    memory_write_valid <= '0';
+    memory_cpu_read_data <= (others => '0');
+    memory_write_done <= '0';
+    memory_read_data <= (others => '0');
+    memory_read_valid <= '0';
+    memory_error <= '0';
+  end generate mem_stream_disabled_g;
 
   q1_enabled_g : if ENABLE_Q1_ENGINE_G generate
     q1_matvec_engine_inst : entity neorv32.q1_matvec_engine
@@ -570,6 +587,9 @@ begin
   end generate;
 
   counters_inst : entity neorv32.counter_block
+    generic map (
+      COUNTER_WIDTH_G => COUNTER_WIDTH_G
+    )
     port map (
       clk_i => clk_i,
       rstn_i => rstn_i,

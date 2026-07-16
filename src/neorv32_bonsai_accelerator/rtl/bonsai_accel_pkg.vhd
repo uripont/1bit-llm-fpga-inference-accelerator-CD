@@ -45,7 +45,7 @@ package bonsai_accel_pkg is
   -- offsets from this memory's base, matching the PSRAM controller aperture.
   constant MEM_WINDOW_BASE_WORD_C : natural := 256;
   constant MEM_WINDOW_WORDS_C     : natural := 16128;
-  constant DESCRIPTOR_COUNT_C     : natural := 16;
+  constant DESCRIPTOR_COUNT_C     : natural := 10;
 
   -- Command register pulse bits.
   constant COMMAND_START_BIT_C : natural := 0;
@@ -133,9 +133,10 @@ package bonsai_accel_pkg is
   constant ATTN_VECTOR_TILE_ELEMENTS_C : natural := 32;
   constant ATTN_VECTOR_TILE_WORDS_C    : natural := 16;
   -- Tang Nano 9K implementation profile used by the board and GQA evaluations.
+  constant ATTN_MAX_QUERY_HEADS_C       : natural := 2;
   constant ATTN_MAX_HEAD_DIM_C         : natural := 32;
   constant ATTN_MAX_KV_HEADS_C         : natural := 1;
-  constant ATTN_SCORE_CAPACITY_C       : natural := 128;
+  constant ATTN_SCORE_CAPACITY_C       : natural := 2;
 
   constant TILE_DIRECTION_INPUT_C  : std_ulogic := '0';
   constant TILE_DIRECTION_OUTPUT_C : std_ulogic := '1';

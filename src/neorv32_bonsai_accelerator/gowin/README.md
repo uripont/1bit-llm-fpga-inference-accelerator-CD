@@ -4,8 +4,16 @@ This directory creates proposal-specific synthesis projects for the NEORV32
 SoC and Bonsai accelerator. It targets
 `GW1NR-LV9QN88PC6/I5`, enables the CFS, selects VHDL 2008, applies the board
 pin mapping, and constrains the input clock to 27 MHz.
-The synthesis SoC keeps the CPU cycle counter and UART while omitting CLINT,
-which the accelerator evaluation firmware does not use.
+The Proposal A synthesis SoC keeps the CPU cycle counter and UART. Proposal B
+keeps the complete CFS measurement counters and one GPIO observation output
+while omitting UART, the CPU's duplicate architectural cycle counters, and
+CLINT. Its cycle evaluation is run in simulation, and the synthesis profile
+establishes board resource and timing feasibility without physical-board
+execution.
+
+The Proposal B synthesis counters retain the 32-bit register interface and use
+24-bit saturating accumulators internally. This covers the measured `ctx=2`
+services with more than 33 times the longest observed command-cycle count.
 
 Open Gowin FPGA Designer Education, select the Console tab, and run:
 
@@ -17,16 +25,22 @@ source {/absolute/path/to/src/neorv32_bonsai_accelerator/gowin/create_project.tc
 Then run **Synthesize** and **Place & Route** from the Process view. Generated
 project files live in `build/` and are recreated from the repository sources.
 
-`stream_memory_boundary.vhd` keeps the PSRAM controller boundary inactive for
-this setup checkpoint. The controller integration replaces this file in the
-PSRAM checkpoint.
-
 `proposal_a` synthesizes the common NEORV32/CFS path and Q1/Q8 engine while
-physically omitting the attention engine. `combined` retains both engines for
-integration analysis.
+physically omitting the attention engine. `proposal_b_cpu_push` synthesizes the
+attention engine with the CPU FIFO frontend and removes the descriptor streamer,
+memory window, and PSRAM boundary. `combined` retains both engines and both
+frontends for integration analysis.
+
+To create the straightforward Proposal B hardware baseline instead, run:
+
+```tcl
+set bonsai_profile proposal_b_cpu_push
+source {/absolute/path/to/src/neorv32_bonsai_accelerator/gowin/create_project.tcl}
+```
 
 The board implementation profile supports the evaluated attention shapes with
-head dimension up to 32, one KV head, and 128 locally stored scores.
+head dimension up to 32, one KV head, and two locally stored scores, matching
+the two Tier 3 compatibility fixtures used for Proposal B evaluation.
 
 ## Proposal A result
 
@@ -41,3 +55,14 @@ operation contract unchanged while meeting the board clock.
 The `combined` profile is an integration check. Its monolithic mapping uses
 32,162 logic elements against 8,640 available, so each proposal has its own
 synthesis configuration for board-feasibility assessment.
+
+## Proposal B CPU push result
+
+Gowin FPGA Designer Education V1.9.11.03 successfully places and routes the
+`proposal_b_cpu_push` profile at 27 MHz. The final timing report gives 28.377
+MHz Fmax with zero setup and hold violations. Routed resource use is
+7,890/8,640 logic elements (92%), 4,331/6,693 registers (65%), 10/26 BSRAM
+blocks (39%), and three `MULT18X18` plus two `MULTADDALU18X18` DSP primitives.
+The profile implements the complete `ctx=2` attention operation, a one-word
+CPU ingress/egress FIFO, and the full CFS measurement categories. MEM_STREAM
+logic and its PSRAM boundary are absent from this bitstream.

@@ -4,10 +4,10 @@
       |  ^~~~~~~
 Memory utilization:
    text	   data	    bss	    dec	    hex	filename
-   5508	      0	    576	   6084	   17c4	main.elf
+   5980	      0	    576	   6556	   199c	main.elf
 Compiling image generator...
 Generating neorv32_imem_image.vhd
-Executable (VHD): 5508 bytes
+Executable (VHD): 5980 bytes
 IMEM_SIZE=262144 DMEM_SIZE=131072 STOP_TIME=8ms \
 SUCCESS_PATTERN=evaluation_status=PASS \
 ../../sim/run-ghdl.sh "/workspaces/1bit-llm-fpga-inference-accelerator-CD/src/neorv32_bonsai_accelerator/sw/attention_kv_evaluation/neorv32_imem_image.vhd"
@@ -26,8 +26,8 @@ SUCCESS_PATTERN=evaluation_status=PASS \
 /workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_debug_auth.vhd:67:3:@0ms:(assertion warning): [NEORV32] Using DEFAULT on-chip debugger authenticator. Replace by custom module.
 /workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_top.vhd:384:5:@0ms:(assertion note): [NEORV32] The NEORV32 RISC-V Processor (v01.13.02.00), github.com/stnolting/neorv32
 /workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_top.vhd:393:5:@0ms:(assertion note): [NEORV32] Processor Configuration: CPU (single-core) IMEM-ROM DMEM I-CACHE D-CACHE XBUS CLINT GPIO UART0 UART1 SPI SDI TWI TWD PWM WDT TRNG CFS NEOLED GPTMR ONEWIRE DMA SLINK SYSINFO TRACER OCD OCD-AUTH OCD-HWBP 
+[progress] Proposal B CPU_PUSH bonsai evaluation: 30s elapsed
 /workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_top.vhd:429:5:@0ms:(assertion warning): [NEORV32] Assuming this is a simulation.
-[progress] Proposal B CPU_PUSH bonsai evaluation: 31s elapsed
 /workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_top.vhd:441:5:@0ms:(assertion note): [NEORV32] BOOT_MODE_SELECT 2 - booting IMEM image
 kernel=attention_kv_engine
 backend=hardware_neorv32_cfs
@@ -45,16 +45,16 @@ value_mac=64
 softmax_elements=4
 input_transactions=8
 output_transactions=4
-command_cycles=4756
-engine_cycles=4209
-active_cycles=140
-input_wait_cycles=2475
+command_cycles=4874
+engine_cycles=4391
+active_cycles=412
+input_wait_cycles=3356
 output_wait_cycles=0
-control_cycles=1594
-frontend_input_wait=2403
-frontend_output_wait=4289
+control_cycles=623
+frontend_input_wait=3284
+frontend_output_wait=2874
+[progress] Proposal B CPU_PUSH bonsai evaluation: 60s elapsed
 input_bytes=256
-[progress] Proposal B CPU_PUSH bonsai evaluation: 61s elapsed
 output_bytes=128
 work_mac=128
 checksum=7569

@@ -5,6 +5,9 @@ use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
 
 entity counter_block is
+  generic (
+    COUNTER_WIDTH_G : positive range 1 to 32 := 32
+  );
   port (
     clk_i  : in std_ulogic;
     rstn_i : in std_ulogic;
@@ -38,7 +41,7 @@ end counter_block;
 
 architecture rtl of counter_block is
 
-  subtype counter_t is unsigned(31 downto 0);
+  subtype counter_t is unsigned(COUNTER_WIDTH_G - 1 downto 0);
   constant COUNTER_MAX_C : counter_t := (others => '1');
 
   signal command_cycles       : counter_t;
@@ -71,17 +74,17 @@ architecture rtl of counter_block is
 
 begin
 
-  command_cycles_o       <= std_ulogic_vector(command_cycles);
-  engine_cycles_o        <= std_ulogic_vector(engine_cycles);
-  active_cycles_o        <= std_ulogic_vector(active_cycles);
-  input_wait_cycles_o    <= std_ulogic_vector(input_wait_cycles);
-  output_wait_cycles_o   <= std_ulogic_vector(output_wait_cycles);
-  control_cycles_o       <= std_ulogic_vector(control_cycles);
-  frontend_input_wait_o  <= std_ulogic_vector(frontend_input_wait);
-  frontend_output_wait_o <= std_ulogic_vector(frontend_output_wait);
-  input_bytes_o          <= std_ulogic_vector(input_bytes);
-  output_bytes_o         <= std_ulogic_vector(output_bytes);
-  work_o                 <= std_ulogic_vector(work);
+  command_cycles_o       <= std_ulogic_vector(resize(command_cycles, 32));
+  engine_cycles_o        <= std_ulogic_vector(resize(engine_cycles, 32));
+  active_cycles_o        <= std_ulogic_vector(resize(active_cycles, 32));
+  input_wait_cycles_o    <= std_ulogic_vector(resize(input_wait_cycles, 32));
+  output_wait_cycles_o   <= std_ulogic_vector(resize(output_wait_cycles, 32));
+  control_cycles_o       <= std_ulogic_vector(resize(control_cycles, 32));
+  frontend_input_wait_o  <= std_ulogic_vector(resize(frontend_input_wait, 32));
+  frontend_output_wait_o <= std_ulogic_vector(resize(frontend_output_wait, 32));
+  input_bytes_o          <= std_ulogic_vector(resize(input_bytes, 32));
+  output_bytes_o         <= std_ulogic_vector(resize(output_bytes, 32));
+  work_o                 <= std_ulogic_vector(resize(work, 32));
 
   counters : process(rstn_i, clk_i)
   begin
@@ -135,12 +138,14 @@ begin
         if frontend_output_wait_i = '1' then
           frontend_output_wait <= saturating_increment(frontend_output_wait);
         end if;
-        input_bytes  <= saturating_add(input_bytes, unsigned(input_bytes_i));
-        output_bytes <= saturating_add(output_bytes, unsigned(output_bytes_i));
-        work         <= saturating_add(work, unsigned(work_i));
+        input_bytes  <= saturating_add(
+          input_bytes, resize(unsigned(input_bytes_i), COUNTER_WIDTH_G));
+        output_bytes <= saturating_add(
+          output_bytes, resize(unsigned(output_bytes_i), COUNTER_WIDTH_G));
+        work         <= saturating_add(
+          work, resize(unsigned(work_i), COUNTER_WIDTH_G));
       end if;
     end if;
   end process counters;
 
 end rtl;
-

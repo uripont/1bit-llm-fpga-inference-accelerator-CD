@@ -411,8 +411,10 @@ int main(void) {
       (2u * ATTENTION_KV_HEADS + ATTENTION_HEADS) * SEGMENTS;
   const unsigned int expected_active =
       input_words + output_words +
-      3u * ATTENTION_HEADS * ATTENTION_CTX +
-      2u * ATTENTION_HEADS * VECTOR_WORDS;
+      ATTENTION_HEADS *
+          (4u * ATTENTION_HEAD_DIM +
+           6u * (ATTENTION_CTX - 1u) * VECTOR_WORDS +
+           23u * ATTENTION_CTX);
 
   neorv32_uart0_setup(19200, 0);
   if (neorv32_cfs_available() == 0 ||
@@ -446,6 +448,23 @@ int main(void) {
       metrics.work != 2u * ATTENTION_HEADS * ATTENTION_CTX * ATTENTION_HEAD_DIM ||
       input_transactions != expected_input_transactions ||
       output_transactions != expected_output_transactions) {
+    neorv32_uart0_printf("checksum=%i\n", checksum);
+    neorv32_uart0_printf("expected_checksum=%i\n", (int32_t)EXPECTED_CHECKSUM);
+    neorv32_uart0_printf("active_cycles=%u\n", metrics.active_cycles);
+    neorv32_uart0_printf("expected_active_cycles=%u\n", expected_active);
+    neorv32_uart0_printf("engine_cycles=%u\n", metrics.engine_cycles);
+    neorv32_uart0_printf("input_wait_cycles=%u\n", metrics.input_wait_cycles);
+    neorv32_uart0_printf("output_wait_cycles=%u\n", metrics.output_wait_cycles);
+    neorv32_uart0_printf("control_cycles=%u\n", metrics.control_cycles);
+    neorv32_uart0_printf("input_bytes=%u expected_input_bytes=%u\n",
+                        metrics.input_bytes, input_words * sizeof(uint32_t));
+    neorv32_uart0_printf("output_bytes=%u expected_output_bytes=%u\n",
+                        metrics.output_bytes, output_words * sizeof(uint32_t));
+    neorv32_uart0_printf("work_mac=%u\n", metrics.work);
+    neorv32_uart0_printf("input_transactions=%u expected_input_transactions=%u\n",
+                        input_transactions, expected_input_transactions);
+    neorv32_uart0_printf("output_transactions=%u expected_output_transactions=%u\n",
+                        output_transactions, expected_output_transactions);
     neorv32_uart0_printf("evaluation_status=FAIL_OUTPUT_OR_COUNTER\n");
     return 1;
   }
