@@ -138,14 +138,15 @@ enum bonsai_accel_q1_scale_format {
  * consecutive tiles; the final transaction carries its valid word count. */
 #define BONSAI_ATTN_VECTOR_TILE_ELEMENTS 32u
 #define BONSAI_ATTN_VECTOR_TILE_WORDS 16u
-#define BONSAI_ATTN_MAX_HEAD_DIM 128u
-#define BONSAI_ATTN_MAX_KV_HEADS 8u
-#define BONSAI_ATTN_SCORE_CAPACITY 256u
+#define BONSAI_ATTN_MAX_QUERY_HEADS 2u
+#define BONSAI_ATTN_MAX_HEAD_DIM 32u
+#define BONSAI_ATTN_MAX_KV_HEADS 1u
+#define BONSAI_ATTN_SCORE_CAPACITY 2u
 
 /* Descriptor length is a tile count. Base and stride are byte-addressed and
  * must be 32-bit aligned. The memory window models the external backing store
  * during simulation and is populated before command timing begins. */
-#define BONSAI_DESCRIPTOR_COUNT 16u
+#define BONSAI_DESCRIPTOR_COUNT 10u
 #define BONSAI_MEM_WINDOW_BASE_WORD 256u
 #define BONSAI_MEM_WINDOW_WORDS 16128u
 

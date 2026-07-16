@@ -59,15 +59,16 @@ controller's 18-cycle minimum interval between burst commands.
 
 Gowin FPGA Designer Education V1.9.11.03 successfully places and routes the
 `proposal_a` profile for `GW1NR-LV9QN88PC6/I5` at the board's 27 MHz clock.
-The final timing report gives 30.610 MHz Fmax with zero setup and hold
-violations. Routed resource use is 6,970/8,640 logic elements (81%),
-3,352/6,693 registers (51%), 16/26 BSRAM blocks (62%), and 8/10 DSP blocks
+The final timing report gives 32.678 MHz Fmax with zero setup and hold
+violations. Routed resource use is 6,758/8,640 logic elements (79%),
+3,329/6,693 registers (50%), 16/26 BSRAM blocks (62%), and 8/10 DSP blocks
 (80%). The Q1 engine reduces four signed lanes per cycle; this keeps the
 operation contract unchanged while meeting the board clock.
 
-The `combined` profile is an integration check. Its monolithic mapping uses
-32,162 logic elements against 8,640 available, so each proposal has its own
-synthesis configuration for board-feasibility assessment.
+The `combined` profile is an integration check and exceeds the device logic
+capacity. Each proposal therefore has its own synthesis configuration for
+board-feasibility assessment; the final report uses only the freshly routed
+proposal-specific results.
 
 ## Proposal B CPU push result
 
@@ -76,7 +77,7 @@ Gowin FPGA Designer Education V1.9.11.03 successfully places and routes the
 MHz Fmax with zero setup and hold violations. Routed resource use is
 7,890/8,640 logic elements (92%), 4,331/6,693 registers (65%), 10/26 BSRAM
 blocks (39%), and three `MULT18X18` plus two `MULTADDALU18X18` DSP primitives.
-The profile implements the complete `ctx=2` attention operation, a one-word
+The profile implements the selected `ctx=2` attention operation, a one-word
 CPU ingress/egress FIFO, and the full CFS measurement categories. MEM_STREAM
 logic and its PSRAM boundary are absent from this bitstream.
 
@@ -92,6 +93,7 @@ profile has no routed timing result.
 The CPU FIFO and software memory aperture are physically absent from this
 profile. Its capacity failure therefore applies to the intended MEM_STREAM-only
 implementation rather than a build containing both data paths. Together with
-the routed CPU_PUSH result, this establishes that Proposal B's complete
-attention engine fits the Tang Nano 9K with CPU_PUSH, while adding Gowin's DQ16
-PSRAM controller and descriptor path exceeds the remaining logic capacity.
+the routed CPU_PUSH result, this establishes that Proposal B's implemented
+`ctx=2` attention engine fits the Tang Nano 9K with CPU_PUSH, while adding
+Gowin's DQ16 PSRAM controller and descriptor path exceeds the remaining logic
+capacity.
