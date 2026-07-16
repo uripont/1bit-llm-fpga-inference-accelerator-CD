@@ -8,7 +8,7 @@ entity stream_memory is
   generic (
     INITIALIZATION_CYCLES : positive := 150;
     READ_LATENCY_CYCLES : positive := 6;
-    COMMAND_INTERVAL_CYCLES : positive := 14
+    COMMAND_INTERVAL_CYCLES : positive := 18
   );
   port (
     clk_i, rstn_i : in std_ulogic;

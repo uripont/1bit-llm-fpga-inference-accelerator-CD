@@ -13,6 +13,9 @@ entity bonsai_cfs_core is
     ENABLE_Q1_ENGINE_G   : boolean := true;
     ENABLE_ATTN_ENGINE_G : boolean := true;
     ENABLE_MEM_STREAM_G  : boolean := true;
+    ENABLE_CPU_PUSH_G    : boolean := true;
+    EXTERNAL_MEMORY_G    : boolean := false;
+    ENABLE_MEMORY_WINDOW_G : boolean := true;
     COUNTER_WIDTH_G      : positive range 1 to 32 := 32
   );
   port (
@@ -119,7 +122,17 @@ architecture rtl of bonsai_cfs_core is
 begin
 
   irq_o     <= '0';
-  cfs_out_o <= (others => '0');
+  cfs_output : process(all)
+  begin
+    cfs_out_o <= (others => '0');
+    if EXTERNAL_MEMORY_G then
+      cfs_out_o(0) <= memory_cmd_valid;
+      cfs_out_o(1) <= memory_cmd_write;
+      cfs_out_o(15 downto 2) <= memory_cmd_address;
+      cfs_out_o(79 downto 16) <= memory_write_data;
+      cfs_out_o(80) <= memory_write_valid;
+    end if;
+  end process cfs_output;
 
   shape_validation : process(all)
     variable heads_v, kv_heads_v : natural;
@@ -224,7 +237,9 @@ begin
 
   reg_file_inst : entity neorv32.cfs_reg_file
     generic map (
-      ENABLE_MEM_STREAM_G => ENABLE_MEM_STREAM_G
+      ENABLE_MEM_STREAM_G => ENABLE_MEM_STREAM_G,
+      ENABLE_CPU_PUSH_G => ENABLE_CPU_PUSH_G,
+      ENABLE_MEMORY_WINDOW_G => ENABLE_MEMORY_WINDOW_G
     )
     port map (
       clk_i => clk_i,
@@ -352,7 +367,8 @@ begin
       error_o => frontend_error
     );
 
-  stream_frontend_inst : entity neorv32.stream_frontend
+  cpu_push_enabled_g : if ENABLE_CPU_PUSH_G generate
+    stream_frontend_inst : entity neorv32.stream_frontend
     generic map (
       FIFO_DEPTH => 1
     )
@@ -394,7 +410,34 @@ begin
       output_bytes_o => cpu_output_bytes,
       idle_o => cpu_idle,
       error_o => cpu_error
-    );
+      );
+  end generate cpu_push_enabled_g;
+
+  cpu_push_disabled_g : if not ENABLE_CPU_PUSH_G generate
+    cpu_transaction_ready <= '0';
+    cpu_input_valid <= '0';
+    cpu_input_data <= (others => '0');
+    cpu_output_ready <= '0';
+    cpu_idle <= '1';
+    cpu_error <= '0';
+    cpu_input_wait <= '0';
+    cpu_output_wait <= '0';
+    cpu_input_bytes <= (others => '0');
+    cpu_output_bytes <= (others => '0');
+    fifo_input_ready <= '0';
+    fifo_output_valid <= '0';
+    fifo_input_level <= (others => '0');
+    fifo_output_level <= (others => '0');
+    fifo_output_data <= (others => '0');
+    input_request_valid <= '0';
+    input_request_role <= ROLE_NONE_C;
+    input_request_tile <= (others => '0');
+    input_request_remaining <= (others => '0');
+    output_request_valid <= '0';
+    output_request_role <= ROLE_NONE_C;
+    output_request_tile <= (others => '0');
+    output_request_remaining <= (others => '0');
+  end generate cpu_push_disabled_g;
 
   mem_stream_enabled_g : if ENABLE_MEM_STREAM_G generate
     memory_streamer_inst : entity neorv32.memory_streamer
@@ -439,7 +482,8 @@ begin
       error_o => mem_error
       );
 
-    stream_memory_inst : entity neorv32.stream_memory
+    internal_memory_g : if not EXTERNAL_MEMORY_G generate
+      stream_memory_inst : entity neorv32.stream_memory
       port map (
       clk_i => clk_i,
       rstn_i => rstn_i,
@@ -458,7 +502,18 @@ begin
       read_data_o => memory_read_data,
       read_valid_o => memory_read_valid,
       error_o => memory_error
-      );
+        );
+    end generate internal_memory_g;
+
+    external_memory_boundary_g : if EXTERNAL_MEMORY_G generate
+      memory_cpu_read_data <= (others => '0');
+      memory_init_done <= cfs_in_i(0);
+      memory_cmd_ready <= cfs_in_i(1);
+      memory_write_done <= cfs_in_i(2);
+      memory_read_data <= cfs_in_i(66 downto 3);
+      memory_read_valid <= cfs_in_i(67);
+      memory_error <= cfs_in_i(68);
+    end generate external_memory_boundary_g;
   end generate mem_stream_enabled_g;
 
   mem_stream_disabled_g : if not ENABLE_MEM_STREAM_G generate

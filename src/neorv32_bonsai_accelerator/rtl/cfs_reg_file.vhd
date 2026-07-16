@@ -10,7 +10,9 @@ use neorv32.bonsai_accel_pkg.all;
 
 entity cfs_reg_file is
   generic (
-    ENABLE_MEM_STREAM_G : boolean := true
+    ENABLE_MEM_STREAM_G  : boolean := true;
+    ENABLE_CPU_PUSH_G    : boolean := true;
+    ENABLE_MEMORY_WINDOW_G : boolean := true
   );
   port (
     clk_i     : in  std_ulogic;
@@ -188,6 +190,9 @@ begin
       fifo_input_write_o <= '0';
       fifo_output_read_o <= '0';
       memory_cpu_write_o <= '0';
+      if not ENABLE_CPU_PUSH_G then
+        fifo_input_data_o <= (others => '0');
+      end if;
       bus_rsp_o.ack   <= bus_req_i.stb;
       bus_rsp_o.err   <= '0';
       bus_rsp_o.data  <= (others => '0');
@@ -206,7 +211,9 @@ begin
                   config_reg <= (others => '0');
                   config_reg(CONFIG_SERVICE_MSB_C downto CONFIG_SERVICE_LSB_C) <=
                     bus_req_i.data(CONFIG_SERVICE_MSB_C downto CONFIG_SERVICE_LSB_C);
-                  if ENABLE_MEM_STREAM_G then
+                  if ENABLE_MEM_STREAM_G and not ENABLE_CPU_PUSH_G then
+                    config_reg(CONFIG_TRANSFER_BIT_C) <= TRANSFER_MEM_STREAM_C;
+                  elsif ENABLE_MEM_STREAM_G then
                     config_reg(CONFIG_TRANSFER_BIT_C) <= bus_req_i.data(CONFIG_TRANSFER_BIT_C);
                   else
                     config_reg(CONFIG_TRANSFER_BIT_C) <= TRANSFER_CPU_PUSH_C;
@@ -244,10 +251,12 @@ begin
                   descriptor_stride(descriptor_select) <= bus_req_i.data;
                 end if;
               when REG_FIFO_IN_C =>
-                fifo_input_data_o  <= bus_req_i.data;
-                fifo_input_write_o <= '1';
+                if ENABLE_CPU_PUSH_G then
+                  fifo_input_data_o  <= bus_req_i.data;
+                  fifo_input_write_o <= '1';
+                end if;
               when others =>
-                if ENABLE_MEM_STREAM_G and
+                if ENABLE_MEM_STREAM_G and ENABLE_MEMORY_WINDOW_G and
                    (word_addr_v >= MEM_WINDOW_BASE_WORD_C) and
                    (word_addr_v < MEM_WINDOW_BASE_WORD_C + MEM_WINDOW_WORDS_C) and
                    (busy_i = '0') then
@@ -310,17 +319,21 @@ begin
               remaining_v := output_request_remaining_i & input_request_remaining_i;
               bus_rsp_o.data <= remaining_v;
             when REG_FIFO_OUT_C =>
-              bus_rsp_o.data <= fifo_output_data_i;
-              fifo_output_read_o <= '1';
+              if ENABLE_CPU_PUSH_G then
+                bus_rsp_o.data <= fifo_output_data_i;
+                fifo_output_read_o <= '1';
+              end if;
             when REG_FIFO_STATUS_C =>
-              fifo_status_v := (others => '0');
-              fifo_status_v(FIFO_INPUT_READY_BIT_C) := fifo_input_ready_i;
-              fifo_status_v(FIFO_OUTPUT_VALID_BIT_C) := fifo_output_valid_i;
-              fifo_status_v(FIFO_INPUT_LEVEL_MSB_C downto FIFO_INPUT_LEVEL_LSB_C) :=
-                fifo_input_level_i;
-              fifo_status_v(FIFO_OUTPUT_LEVEL_MSB_C downto FIFO_OUTPUT_LEVEL_LSB_C) :=
-                fifo_output_level_i;
-              bus_rsp_o.data <= fifo_status_v;
+              if ENABLE_CPU_PUSH_G then
+                fifo_status_v := (others => '0');
+                fifo_status_v(FIFO_INPUT_READY_BIT_C) := fifo_input_ready_i;
+                fifo_status_v(FIFO_OUTPUT_VALID_BIT_C) := fifo_output_valid_i;
+                fifo_status_v(FIFO_INPUT_LEVEL_MSB_C downto FIFO_INPUT_LEVEL_LSB_C) :=
+                  fifo_input_level_i;
+                fifo_status_v(FIFO_OUTPUT_LEVEL_MSB_C downto FIFO_OUTPUT_LEVEL_LSB_C) :=
+                  fifo_output_level_i;
+                bus_rsp_o.data <= fifo_status_v;
+              end if;
             when REG_COUNTER_COMMAND_C =>
               bus_rsp_o.data <= counter_command_i;
             when REG_COUNTER_ENGINE_C =>
@@ -344,7 +357,7 @@ begin
             when REG_COUNTER_WORK_C =>
               bus_rsp_o.data <= counter_work_i;
             when others =>
-              if ENABLE_MEM_STREAM_G and
+              if ENABLE_MEM_STREAM_G and ENABLE_MEMORY_WINDOW_G and
                  (word_addr_v >= MEM_WINDOW_BASE_WORD_C) and
                  (word_addr_v < MEM_WINDOW_BASE_WORD_C + MEM_WINDOW_WORDS_C) then
                 bus_rsp_o.data <= memory_cpu_data_i;

@@ -11,7 +11,7 @@ entity stream_memory is
   generic (
     INITIALIZATION_CYCLES : positive := 150;
     READ_LATENCY_CYCLES : positive := 6;
-    COMMAND_INTERVAL_CYCLES : positive := 14
+    COMMAND_INTERVAL_CYCLES : positive := 18
   );
   port (
     clk_i, rstn_i : in std_ulogic;
@@ -34,7 +34,7 @@ entity stream_memory is
 end stream_memory;
 
 architecture controller_model of stream_memory is
-  -- Tang Nano 9K DQ16 configuration: BL16 = four 64-bit user beats = 32 bytes.
+  -- Tang Nano 9K DQ16 configuration: a 32-byte burst is four 64-bit user beats.
   constant USER_BEATS_PER_BURST_C : natural := 4;
   constant WORDS_PER_USER_BEAT_C : natural := 2;
   type memory_t is array (0 to MEM_WINDOW_WORDS_C - 1) of

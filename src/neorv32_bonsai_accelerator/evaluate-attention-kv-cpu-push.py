@@ -205,10 +205,10 @@ def validate_compatibility(profile: Profile, software: dict[str, str],
         "memory_model": "gowin_psram_hs_v2_user_interface",
         "psram_dq_width": "16",
         "psram_user_data_width": "64",
-        "psram_burst_length": "16",
+        "psram_burst_length": "32",
         "psram_burst_bytes": "32",
         "psram_read_latency_cycles": "6",
-        "psram_command_interval_cycles": "14",
+        "psram_command_interval_cycles": "18",
     }
     memory_mismatches = [
         f"{key}: expected {value}, got {hardware.get(key, '<missing>')}"

@@ -28,8 +28,9 @@ project files live in `build/` and are recreated from the repository sources.
 `proposal_a` synthesizes the common NEORV32/CFS path and Q1/Q8 engine while
 physically omitting the attention engine. `proposal_b_cpu_push` synthesizes the
 attention engine with the CPU FIFO frontend and removes the descriptor streamer,
-memory window, and PSRAM boundary. `combined` retains both engines and both
-frontends for integration analysis.
+memory window, and PSRAM boundary. `proposal_b_mem_stream` replaces the CPU FIFO
+with the descriptor streamer and Gowin's generated DQ16 PSRAM controller.
+`combined` retains both engines and both frontends for integration analysis.
 
 To create the straightforward Proposal B hardware baseline instead, run:
 
@@ -41,6 +42,18 @@ source {/absolute/path/to/src/neorv32_bonsai_accelerator/gowin/create_project.tc
 The board implementation profile supports the evaluated attention shapes with
 head dimension up to 32, one KV head, and two locally stored scores, matching
 the two Tier 3 compatibility fixtures used for Proposal B evaluation.
+
+To create the descriptor-driven Proposal B profile, run:
+
+```tcl
+set bonsai_profile proposal_b_mem_stream
+source {/absolute/path/to/src/neorv32_bonsai_accelerator/gowin/create_project.tcl}
+```
+
+This profile uses the generated IP under `ip/`: a 27-to-54 MHz PLL and the
+single-channel Gowin PSRAM HS controller configured for DQ16, 64-bit user
+beats, 32-byte bursts, and six-cycle initial latency. The adapter enforces the
+controller's 18-cycle minimum interval between burst commands.
 
 ## Proposal A result
 
@@ -66,3 +79,19 @@ blocks (39%), and three `MULT18X18` plus two `MULTADDALU18X18` DSP primitives.
 The profile implements the complete `ctx=2` attention operation, a one-word
 CPU ingress/egress FIFO, and the full CFS measurement categories. MEM_STREAM
 logic and its PSRAM boundary are absent from this bitstream.
+
+## Proposal B MEM_STREAM result
+
+Gowin FPGA Designer Education V1.9.11.03 successfully analyzes and maps the
+`proposal_b_mem_stream` profile, including the NEORV32 SoC, attention engine,
+descriptor streamer, generated PLL, and generated DQ16 PSRAM controller. The
+mapped design requires 11,578/8,640 logic elements (134%). Gowin therefore
+stops synthesis at the device-capacity check, before place and route, so this
+profile has no routed timing result.
+
+The CPU FIFO and software memory aperture are physically absent from this
+profile. Its capacity failure therefore applies to the intended MEM_STREAM-only
+implementation rather than a build containing both data paths. Together with
+the routed CPU_PUSH result, this establishes that Proposal B's complete
+attention engine fits the Tang Nano 9K with CPU_PUSH, while adding Gowin's DQ16
+PSRAM controller and descriptor path exceeds the remaining logic capacity.

@@ -45,7 +45,7 @@ entity memory_streamer is
 end memory_streamer;
 
 architecture rtl of memory_streamer is
-  -- DQ16 with BL16 yields four 64-bit user beats, or eight local 32-bit words.
+  -- A DQ16 32-byte burst yields four 64-bit beats, or eight local words.
   constant BURST_WORDS_C : natural := 8;
   constant BURST_BEATS_C : natural := 4;
   type state_t is (

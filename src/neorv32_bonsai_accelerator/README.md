@@ -4,7 +4,7 @@ This directory contains the project-owned RTL and firmware for the hardware
 accelerator described in `docs/02-bonsai-accelerator-hardware-blueprint.pdf`.
 The upstream NEORV32 submodule remains unchanged.
 
-The reproducible Tang Nano 9K Gowin project and its pre-PSRAM setup result are
+The reproducible Tang Nano 9K Gowin projects and their synthesis results are
 documented in `gowin/README.md`.
 
 The current implementation establishes the CFS identity, interface version,
@@ -27,12 +27,13 @@ applies the Q1 and Q8 scales in separate pipeline stages, preserves a 64-bit
 accumulator across groups, and emits one saturated signed 16-bit result per
 row. It accepts raw FP16 scales for GGUF rows and signed fixed-Q8 scales for the
 Tier 3 synthetic board fixture. `CPU_PUSH` deliberately resends the Q8 vector
-for every row; activation reuse is deferred to the future `MEM_STREAM` path.
-The `CPU_PUSH` frontend provides independent ingress and egress FIFOs, request metadata,
-backpressure, physical-byte counters, and frontend wait counters. Local tile
-buffers stage complete role-tagged input and output transactions between the
-FIFOs and engine. `MEM_STREAM` remains a subsequent stage and currently
-terminates with an unsupported-mode error.
+for every row; activation reuse remains outside the current Proposal A profile.
+The `CPU_PUSH` frontend provides independent ingress and egress FIFOs, request
+metadata, backpressure, physical-byte counters, and frontend wait counters.
+Local tile buffers stage complete role-tagged input and output transactions
+between the FIFOs and engine. The Proposal B `MEM_STREAM` frontend uses
+role-indexed descriptors and a burst adapter to transfer those same tiles
+through the PSRAM-controller interface.
 
 ## Validate the CFS integration
 
@@ -50,7 +51,7 @@ Q1/Q8 tile sequence and deterministic fixtures, including a 16-group,
 2048-element row and a multi-row command, checks counter identity and FIFO
 payloads, acknowledges repeated commands, checks both attention compatibility
 shapes, their role-tagged tile sequences, GQA mapping, complete attention output
-vectors, invalid-shape rejection, and the current `MEM_STREAM` error behavior.
+vectors, invalid-shape rejection, and the disabled-`MEM_STREAM` error behavior.
 The two-word FIFOs exercise CPU-side backpressure, while local tiles keep the
 engines independent of CPU drain timing.
 
@@ -115,7 +116,7 @@ Both outputs match the Tier 3 checksums, 5,274 and 7,569. The compute engine is
 therefore complete under `CPU_PUSH`, but utilization remains 8.707% for board
 and 9.383% for GQA because the engine spends most elapsed cycles waiting for
 CPU-provided input. These results establish the straightforward hardware
-baseline for the subsequent `MEM_STREAM` implementation.
+baseline used to evaluate the descriptor-driven `MEM_STREAM` path.
 
 ## Evaluate Proposal B MEM_STREAM
 
@@ -123,8 +124,8 @@ baseline for the subsequent `MEM_STREAM` implementation.
 between backing memory and the same attention engine. The simulation memory
 aperture is loaded before command timing. Timed transfers use a behavioral
 model of the Gowin PSRAM HS controller's user-side interface configured for the
-Tang Nano 9K: physical DQ16, 64-bit user beats, BL16 bursts, a fixed-latency
-setting of six, and a 14-user-clock minimum command interval. The controller
+Tang Nano 9K: physical DQ16, 64-bit user beats, 32-byte bursts, a fixed-latency
+setting of six, and an 18-user-clock minimum command interval. The controller
 user clock shares the 27 MHz system-clock domain, corresponding to a 54 MHz
 memory clock at the IP's 1:2 ratio. Initialization gates requests before fixture
 execution; physical pins and electrical timing remain outside this
@@ -136,7 +137,18 @@ python3 src/neorv32_bonsai_accelerator/evaluate-attention-kv-mem-stream.py
 
 Results are written under
 `results/proposal_b_evaluation/attention_kv/mem_stream/` and include direct
-command-cycle and frontend-wait comparisons with CPU push. The committed
-MEM_STREAM results predate the final timing pipeline and will be regenerated
-with the dedicated MEM_STREAM synthesis profile before reporting the final
-frontend comparison.
+command-cycle and frontend-wait comparisons with CPU push. The evaluation
+produced:
+
+| Profile | Tier 3 software | `CPU_PUSH` command | `MEM_STREAM` command | vs. Tier 3 | vs. `CPU_PUSH` |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Board, H1/KVH1/D32/C2 | 489,007 | 5,453 | 810 | 603.712x | 6.732x |
+| Bonsai GQA, H2/KVH1/D16/C2 | 494,741 | 4,874 | 706 | 700.766x | 6.904x |
+
+Both outputs match the CPU-push and Tier 3 checksums. Engine utilization rises
+from 8.707% to 51.756% for the board fixture and from 9.383% to 59.624% for the
+GQA fixture because descriptor-driven bursts remove most CPU delivery waits.
+These simulation results use the same controller contract as the dedicated
+MEM_STREAM synthesis profile. Gowin maps that profile to 11,578 logic elements
+against 8,640 available, so it cannot be placed on the Tang Nano 9K in its
+current form; the complete CPU-push attention profile does fit and route.
