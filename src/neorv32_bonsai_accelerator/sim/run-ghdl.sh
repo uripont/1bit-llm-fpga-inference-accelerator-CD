@@ -41,6 +41,7 @@ done < <(find "${NEORV32_ROOT}/rtl/core" -type f -name '*.vhd' \
   "${RTL_DIR}/memory_streamer.vhd" \
   "${RTL_DIR}/q1_matvec_engine.vhd" \
   "${RTL_DIR}/attn_kv_engine.vhd" \
+  "${RTL_DIR}/bonsai_cfs_core.vhd" \
   "${RTL_DIR}/neorv32_cfs.vhd" \
   "${APP_IMAGE}"
 

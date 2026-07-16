@@ -52,6 +52,7 @@ architecture rtl of q1_matvec_engine is
 
   signal state : state_t;
   signal q8_index, compute_block : natural range 0 to Q8_BLOCKS_PER_Q1_C - 1;
+  signal reduce_step : natural range 0 to 7;
   signal group_index : natural range 0 to MAX_GROUPS_C - 1;
   signal group_count : natural range 1 to MAX_GROUPS_C;
   signal row_index : natural range 0 to 65534;
@@ -61,7 +62,7 @@ architecture rtl of q1_matvec_engine is
   signal q8_scales : q8_scale_array_t;
   signal q1_signs : std_ulogic_vector(Q1_GROUP_ELEMENTS_C - 1 downto 0);
   signal scale_fixed : std_ulogic;
-  signal q1_scale_q8, block_sum : signed(31 downto 0);
+  signal q1_scale_q8, block_sum, reduction_accumulator : signed(31 downto 0);
   signal scale_product : signed(63 downto 0);
   signal row_accumulator : signed(63 downto 0);
   signal output_result : std_ulogic_vector(31 downto 0);
@@ -156,6 +157,7 @@ begin
       state             <= IDLE;
       q8_index          <= 0;
       compute_block     <= 0;
+      reduce_step       <= 0;
       group_index       <= 0;
       group_count       <= 1;
       row_index         <= 0;
@@ -165,6 +167,7 @@ begin
       scale_fixed       <= Q1_SCALE_FP16_C;
       q1_scale_q8       <= (others => '0');
       block_sum         <= (others => '0');
+      reduction_accumulator <= (others => '0');
       scale_product     <= (others => '0');
       row_accumulator   <= (others => '0');
       output_result     <= (others => '0');
@@ -174,6 +177,7 @@ begin
           if launch_i = '1' then
             q8_index        <= 0;
             compute_block   <= 0;
+            reduce_step     <= 0;
             group_index     <= 0;
             row_index       <= 0;
             word_index      <= 0;
@@ -181,6 +185,7 @@ begin
             q1_signs        <= (others => '0');
             q1_scale_q8     <= (others => '0');
             block_sum       <= (others => '0');
+            reduction_accumulator <= (others => '0');
             scale_product   <= (others => '0');
             row_accumulator <= (others => '0');
             output_result   <= (others => '0');
@@ -249,6 +254,8 @@ begin
             end if;
             if word_index = Q1_GROUP_WORDS_C - 1 then
               compute_block   <= 0;
+              reduce_step     <= 0;
+              reduction_accumulator <= (others => '0');
               state <= REDUCE_BLOCK;
             else
               word_index <= word_index + 1;
@@ -256,18 +263,26 @@ begin
           end if;
 
         when REDUCE_BLOCK =>
-          reduction_v := (others => '0');
-          for lane in 0 to Q8_BLOCK_ELEMENTS_C - 1 loop
+          reduction_v := reduction_accumulator;
+          for lane in 0 to 3 loop
             lane_v := resize(q8_values(
-                compute_block * Q8_BLOCK_ELEMENTS_C + lane), 32);
-            if q1_signs(compute_block * Q8_BLOCK_ELEMENTS_C + lane) = '1' then
+                compute_block * Q8_BLOCK_ELEMENTS_C + reduce_step * 4 + lane), 32);
+            if q1_signs(
+                compute_block * Q8_BLOCK_ELEMENTS_C + reduce_step * 4 + lane) = '1' then
               reduction_v := reduction_v + lane_v;
             else
               reduction_v := reduction_v - lane_v;
             end if;
           end loop;
-          block_sum <= reduction_v;
-          state <= SCALE_BLOCK;
+          if reduce_step = 7 then
+            block_sum <= reduction_v;
+            reduce_step <= 0;
+            reduction_accumulator <= (others => '0');
+            state <= SCALE_BLOCK;
+          else
+            reduce_step <= reduce_step + 1;
+            reduction_accumulator <= reduction_v;
+          end if;
 
         when SCALE_BLOCK =>
           scale_product <= q1_scale_q8 * q8_scales(compute_block);
@@ -290,6 +305,8 @@ begin
               end if;
             else
               compute_block <= compute_block + 1;
+              reduce_step <= 0;
+              reduction_accumulator <= (others => '0');
               state <= REDUCE_BLOCK;
             end if;
 
@@ -308,6 +325,8 @@ begin
               q8_index          <= 0;
               compute_block     <= 0;
               block_sum         <= (others => '0');
+              reduce_step       <= 0;
+              reduction_accumulator <= (others => '0');
               scale_product     <= (others => '0');
               row_accumulator   <= (others => '0');
               state <= REQUEST_Q8;

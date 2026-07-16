@@ -1,4 +1,4 @@
--- Default CFS wrapper used by simulation: both accelerator services enabled.
+-- Tang Nano 9K CFS wrapper for Proposal A synthesis.
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -23,7 +23,7 @@ begin
   core_inst : entity neorv32.bonsai_cfs_core
     generic map (
       ENABLE_Q1_ENGINE_G => true,
-      ENABLE_ATTN_ENGINE_G => true
+      ENABLE_ATTN_ENGINE_G => false
     )
     port map (
       clk_i => clk_i,

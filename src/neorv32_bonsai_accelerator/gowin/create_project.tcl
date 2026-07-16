@@ -3,7 +3,13 @@
 
 set script_dir [file normalize [file dirname [info script]]]
 set repo_dir [file normalize [file join $script_dir ../../..]]
-set project_name bonsai_tang_nano_9k
+if {![info exists bonsai_profile]} {
+  set bonsai_profile proposal_a
+}
+if {$bonsai_profile ni {proposal_a combined}} {
+  error "unsupported bonsai_profile: $bonsai_profile"
+}
+set project_name bonsai_tang_nano_9k_${bonsai_profile}
 set build_dir [file join $script_dir build]
 
 file mkdir $build_dir
@@ -33,13 +39,21 @@ set accel_sources {
   accel_top.vhd
   counter_block.vhd
   cfs_reg_file.vhd
-  neorv32_cfs.vhd
+  bonsai_cfs_core.vhd
 }
 foreach source $accel_sources {
   set path [file join $accel_dir $source]
   import_files -file $path -force
   set_file_prop -lib neorv32 [file join $project_dir src $source]
 }
+
+if {$bonsai_profile eq "proposal_a"} {
+  set cfs_wrapper [file join $script_dir neorv32_cfs_proposal_a.vhd]
+} else {
+  set cfs_wrapper [file join $accel_dir neorv32_cfs.vhd]
+}
+import_files -file $cfs_wrapper -force
+set_file_prop -lib neorv32 [file join $project_dir src [file tail $cfs_wrapper]]
 
 import_files -file [file join $script_dir stream_memory_boundary.vhd] -force
 set_file_prop -lib neorv32 [file join $project_dir src stream_memory_boundary.vhd]
@@ -50,7 +64,8 @@ import_files -file [file join $script_dir tang_nano_9k.sdc] -force
 set_option -top_module bonsai_tang_nano_9k_top
 set_option -synthesis_tool gowinsynthesis
 set_option -vhdl_std vhd2008
+set_option -global_freq 27
 set_option -output_base_name bonsai_tang_nano_9k
 set_option -use_done_as_gpio 1
 
-puts "BONSAI_GOWIN_PROJECT_READY $project_dir"
+puts "BONSAI_GOWIN_PROJECT_READY profile=$bonsai_profile path=$project_dir"

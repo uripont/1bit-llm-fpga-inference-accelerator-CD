@@ -31,7 +31,7 @@ begin
       DMEM_EN          => true,
       DMEM_SIZE        => 8 * 1024,
       IO_GPIO_NUM      => 6,
-      IO_CLINT_EN      => true,
+      IO_CLINT_EN      => false,
       IO_UART0_EN      => true,
       IO_CFS_EN        => true
     )
