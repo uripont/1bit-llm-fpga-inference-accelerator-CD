@@ -455,7 +455,7 @@ It shares the common engine launch/completion contract. Its semantic phases pres
 
 The local cache view makes the newly appended K/V available when the current context position is scanned. The shared frontend can complete the corresponding FIFO drain or PSRAM writeback in parallel, and `accel_top` holds command completion until that transfer finishes.
 
-The committed Tier 3 compatibility implementation keeps every reference score in FPGA-local storage, so context sweeps extend up to the selected local score capacity. A future scalable score-storage or normalization extension is validated separately against this reference. The FSM states express per-head semantic order; a GQA-optimized tile schedule may interleave query heads mapped to one KV head so they consume a retained K/V tile while preserving each head's ordered operations and results. Logical K/V work remains equal to Tier 3, while physical frontend bytes reveal the resulting reuse.
+The Tier 3 compatibility implementation keeps every reference score in FPGA-local storage. Larger contexts require scalable score storage or normalization and separate validation against this reference. The FSM states express per-head semantic order; a GQA-optimized tile schedule may interleave query heads mapped to one KV head so they consume a retained K/V tile while preserving each head's ordered operations and results. Logical K/V work remains equal to Tier 3, while physical frontend bytes reveal the resulting reuse.
 
 = Evaluation Contract
 
@@ -463,7 +463,7 @@ The hardware benchmark preserves the Tier 3 operation dimensions, input formats,
 
 Memory-path comparisons use the same prepared payload image and declared result destination. Fixture generation and initial placement occur before timing. In `CPU_PUSH`, the driver relays payloads between the declared backing memory and the CFS FIFOs, including final result placement. In `MEM_STREAM`, the descriptor-driven frontend performs those transfers directly. The timed service boundary includes the complete relay or stream path through result placement, so the comparison measures the removal of CPU-mediated data movement around an unchanged engine workload.
 
-== Compatibility and Scale-Out Profiles
+== Compatibility Profiles
 
 The Tier 3 compatibility profiles establish the first correctness and software-cycle comparisons:
 
@@ -475,15 +475,17 @@ The Tier 3 compatibility profiles establish the first correctness and software-c
   [Attention/KV], [`H=1, KVH=1, D=32, C=2`], [`489,007`], [`H=2, KVH=1, D=16, C=2`], [`494,741`],
 )
 
-These small profiles establish semantic compatibility. Hardware characterization then exercises the architecture beyond the simulation-limited Tier 3 shapes:
+These profiles define the implementation acceptance scope:
 
 #list(
-  [Proposal A increases row and group counts to measure command startup, Q8 reuse, and sustained row throughput. Representative hidden widths remain tied to Tier 2/Bonsai shapes.],
-  [Proposal B increases context length while holding a declared head configuration fixed, up to the selected score-storage and simulation limits. Every point runs with the same engine and data under `CPU_PUSH` and `MEM_STREAM`.],
+  [Proposal A validates one complete row at the 128-element board work-unit and 2,048-element Bonsai hidden width, including complete command timing and output comparison.],
+  [Proposal B validates the declared `ctx = 2` board and GQA services under `CPU_PUSH` and `MEM_STREAM`, preserving the engine workload while exposing data-delivery effects.],
 )
+
+Larger row counts and context sweeps extend this characterization toward sustained throughput. They remain future work because they require additional fixture storage and substantially longer cycle simulation while leaving the service contracts unchanged.
 
 = Summary
 
 This blueprint defines a shared accelerator shell with two fixed service contracts and two selectable data-delivery paths. The Q1_0 by Q8_0 engine matches the packed matvec operation measured in Tier 3. The attention/KV engine matches the append, score, stable-softmax, and weighted-value service. `CPU_PUSH` establishes a straightforward hardware baseline, while `MEM_STREAM` uses PSRAM descriptors and local ping-pong tiles to reduce data-delivery stalls around the same compute engines, primarily targeting Proposal B.
 
-The next step is to implement the common shell and one engine at a time, validate the Tier 3 compatibility profiles, and then run the scale-out, memory-path, and board-feasibility assessments defined above. 
+Implementation follows this blueprint one service at a time: validate each Tier 3 compatibility profile, compare the two attention data paths around the same engine, and synthesize proposal-specific SoCs for board feasibility.

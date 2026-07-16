@@ -1,49 +1,34 @@
-# Tier 3: NEORV32 Cycle Kernels
+# Tier 3: NEORV32 Cycle Baselines
 
-Tier 3 is the cycle-count baseline for the accelerator targets, reducing the target computations to small NEORV32 programs that can be measured in simulation.
+Tier 3 measures the two pre-acceleration software services on a simulated NEORV32 CPU. These programs define the operation shapes, inputs, outputs, checksums, and cycle boundaries later used by the hardware evaluations.
 
-The goal is to collect precise pre-acceleration metrics for the same two engines that will later be replaced by custom accelerator calls:
+- `q1_matvec.c`: packed Q1_0 by Q8_0 matrix-vector work.
+- `attention_scan.c`: K/V append, QK scoring, stable softmax, weighted-V accumulation, and attention output.
 
-- `q1_matvec.c`: packed Q1_0 matrix-vector work.
-- `attention_scan.c`: KV-cache attention score/value scan work.
+## Q1 Matvec Contract
 
-The kernels should use GGUF-derived Bonsai tensors and the same target dimensions as the real model, but run only a reduced depth such as one or two layers. That keeps NEORV32 simulation practical while preserving the loop shapes that the accelerator engines need to replace.
+The activation is already quantized into Q8_0 blocks and the weights already use the GGUF Q1_0 block layout. The timed service reads packed blocks, performs sign-controlled integer accumulation, applies both quantization scales, and writes signed-16 row outputs.
 
-## Q1 matvec baseline contract
+Two profiles are retained:
+- `board`: one synthetic 128-element Q1/Q8 group within the 16 KiB IMEM and 8 KiB DMEM simulation configuration used for the board SoC.
+- `bonsai`: one 2,048-element row using packed GGUF data and enlarged simulated memories. Fixture provenance is documented in `generated/README.md`.
 
-`q1_matvec.c` is the pre-acceleration software baseline for the future Q1_0 matvec accelerator.
+With the development container running, execute the benchmark drivers from a host terminal at the repository root. The `devcontainer` runner enters the container with `docker exec`.
 
-- input activation data is already in Q8_0 blocks,
-- Q1_0 weights are already packed as scale bytes plus 128 sign bits,
-- the timed kernel reads those packed blocks, performs sign-controlled add/sub accumulation, applies scales, and writes/checks output rows.
-
-The runner exposes two profiles:
-
-- `board`: Tang Nano 9K-style NEORV32 memory envelope, synthetic packed Q1/Q8 tiles, currently intended for board-faithful pre/post acceleration comparison.
-- `bonsai`: Bonsai operation-shape profile, GGUF fixture-backed packed Q1 rows, enlarged simulation memory for model-shape extrapolation.
-
-Run the baselines:
-
-```bash
+```sh
 python3 src/tier3_neorv32_cycle_kernels/run-q1-matvec-benchmark.py --runner devcontainer --profile board --variants q1_group_1row
-
 python3 src/tier3_neorv32_cycle_kernels/run-q1-matvec-benchmark.py --runner devcontainer --profile bonsai --variants q1_hidden_1row
 ```
 
-## Attention/KV pre-acc baseline contract
+## Attention/KV Contract
 
-`attention_scan.c` is the software pre-acceleration reference for the future attention/KV engine.
+Q, K, and V are available at the attention backend boundary. The timed service appends current K/V, maps query heads to KV heads, scans K for scaled QK scores, applies stable softmax, scans V for the weighted output, and writes signed-16 attention vectors. The board and GQA fixtures use deterministic synthetic Q/K/V data because Tier 3 targets the backend operation contract rather than a full layer trace.
 
-- Q, K, and V are already available at the attention backend boundary,
-- the timed service appends current K/V, scans K for QK scores, applies exact softmax, scans V, and writes the attention output,
-- reported phase cycles are software phase cycles, not hardware memory-wait counters.
+Service and phase cycles include the ordinary CPU loads and stores used by the software implementation. They provide the complete pre-acceleration cost; hardware counters later separate useful engine activity from frontend and buffer waiting.
 
-This benchmark defines the operation shape and CPU software *cost, mostly compute-wise* (cycle count as the main proxy). Later accelerator simulations should compare how it performs to the same operation shape with hardware acceleration, as well as how such accelerated computations perform when usingnaive hardware memory access against hardware-backed, optimized streaming/FIFO memory access.
-
-Run the baselines:
-
-```bash
+```sh
 python3 src/tier3_neorv32_cycle_kernels/run-attention-kv-benchmark.py --runner devcontainer --profile board
-
 python3 src/tier3_neorv32_cycle_kernels/run-attention-kv-benchmark.py --runner devcontainer --profile bonsai
 ```
+
+Committed build logs, simulation logs, and CSV summaries live under `results/tier3_neorv32_cycle_kernels/`.

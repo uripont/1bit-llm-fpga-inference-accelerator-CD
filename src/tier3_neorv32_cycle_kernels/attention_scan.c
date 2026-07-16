@@ -137,7 +137,7 @@ static void attention_backend(void) {
     score_cycles += t3_cycle_counter() - phase_start;
 
     // Normalization mode is selectable so the same stream-shaped service can
-    // be measured both as pure traversal-ish work and as exact softmax.
+    // be measured both as traversal-only work and with stable softmax.
     phase_start = t3_cycle_counter();
 #if ATTENTION_NORM_MODE == ATTENTION_NORM_NONE
     (void)max_score;

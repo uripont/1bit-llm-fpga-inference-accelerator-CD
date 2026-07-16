@@ -42,7 +42,7 @@ The firmware prepares each fixture before timing, launches one CFS service and v
 
 `MEM_STREAM` models the generated Gowin PSRAM HS controller interface: DQ16 physical width, 64-bit user beats, 32-byte bursts, six cycles of configured read latency and an 18-user-clock minimum command interval. Fixtures are preloaded before timing, and synthesis assumes command inputs already reside in PSRAM. The model covers controller timing and handshakes; wider-system initialization and electrical pin behavior remain outside the measured service.
 
-Board feasibility uses Gowin FPGA Designer Education V1.9.11.03 for `GW1NR-LV9QN88PC6/I5` at 27 MHz. Each trimmed SoC omits the other engine and unused frontend. Proposal A and Proposal B `CPU_PUSH` use the applicable board pin constraints; over-capacity `MEM_STREAM` stops before pin placement and timing analysis.
+Board feasibility uses Gowin FPGA Designer Education V1.9.11.03 for `GW1NR-LV9QN88PC6/I5` at 27 MHz. The proposal-specific SoCs retain one engine and its selected frontend. A separate combined profile retains both engines and the shared frontends as a capacity check. Proposal A and Proposal B `CPU_PUSH` use the applicable board pin constraints; over-capacity profiles stop before pin placement and timing analysis.
 
 The cycle results are preserved under `results/proposal_a_evaluation/` and `results/proposal_b_evaluation/`. Raw Gowin resource, timing and capacity reports are preserved under `results/gowin_synthesis/`.
 
@@ -62,6 +62,8 @@ The cycle results are preserved under `results/proposal_a_evaluation/` and `resu
 )
 
 Both outputs match the Tier 3 checksums. The packed arithmetic reduces useful work to 82 cycles for one 128-element group and 1,297 cycles for sixteen groups. Complete command speedup is lower because `CPU_PUSH` sends every packed activation and weight tile through CFS. Even with that straightforward path, the service remains 4.4x to 7.0x faster than the naive software implementation.
+
+These profiles validate one output row at each selected width. They establish command acceleration for the Bonsai-shaped row operation; multirow sustained throughput remains future characterization.
 
 = Proposal B: Attention/KV
 
@@ -87,7 +89,7 @@ Both outputs match the Tier 3 checksums. The packed arithmetic reduces useful wo
 
 The CPU-push implementation is already 89.677x and 101.506x faster than the corresponding Tier 3 services. Its engine utilization remains below 10%, showing that FIFO delivery dominates the remaining command time. With the same 398 and 412 active engine cycles, `MEM_STREAM` reduces command time by another 6.7x to 6.9x, raises utilization above 51%, and sharply reduces frontend input wait. Both transfer modes produce the displayed expected output checksums.
 
- Note that these profiles validate service compatibility and memory-path accounting at just `ctx = 2`, given the physical PSRAM controller and local score storage restrictions.
+These profiles validate service compatibility and memory-path accounting at `ctx = 2`, matching the implemented local score storage. Longer-context throughput remains future characterization.
 
 = Tang Nano 9K Feasibility
 
@@ -100,12 +102,13 @@ The CPU-push implementation is already 89.677x and 101.506x faster than the corr
   [Proposal A], [6,758 / 8,640], [3,329 / 6,693], [16 / 26], [8 / 10], [32.678 MHz],
   [Proposal B `CPU_PUSH`], [7,890 / 8,640], [4,331 / 6,693], [10 / 26], [3.5 / 10], [28.377 MHz],
   [Proposal B `MEM_STREAM`], [11,578 / 8,640], [-], [-], [-], [-],
+  [Combined services], [16,830 / 8,640], [-], [-], [-], [-],
 )
 
-Proposal A and Proposal B CPU push both complete place and route above the required 27 MHz clock, with zero setup and hold total negative slack. They use 79% and 92% of the available logic, respectively. Proposal B CPU push also occupies 98% of the available configurable logic slices, so its successful placement has limited resource margin. The MEM_STREAM-only profile excludes the CPU FIFO and software memory aperture, yet the NEORV32 SoC, attention engine, descriptor streamer, PLL and generated DQ16 PSRAM controller require 134% of device logic.
+Proposal A and Proposal B CPU push both complete place and route above the required 27 MHz clock, with zero setup and hold total negative slack. They use 79% and 92% of the available logic, respectively; Proposal B CPU push also occupies 98% of the configurable logic slices, leaving limited resource margin. The MEM_STREAM profile requires 11,578 logic elements, or 134% of device capacity. The combined profile requires 16,830 logic elements, or 195%. Both over-capacity profiles stop during synthesis.
 
 = Conclusions
 
 The project demonstrates two hardware services derived from measured Bonsai workloads and validated on the selected operation fixtures. Proposal A turns packed Q1/Q8 computation into an overall 4.4x to 7.0x service speedup and fits the target FPGA. Proposal B moves the implemented attention operation into hardware; its board-feasible CPU-push version is about 90x to 102x faster than naive software. Descriptor-driven streaming then removes most frontend waiting in controller-contract simulation and provides a further 6.7x to 6.9x improvement around the same compute engine.
 
-However, the MEM_STREAM implementation exceeds the available logic and cannot be placed on the Tang Nano 9K. Not only that, but even these reduced accelerator services can't both fit simultaneously on the same device. This means that we can't make confident assertions and extrapolations about the performance of a complete Bonsai LLM accelerator on the Tang Nano 9K, which has proved impossible. If using a larger FPGA, the MEM_STREAM service could be implemented and evaluated, both proposals could be placed on the same device and tuned, and the complete Bonsai LLM accelerator could be implemented and evaluated, to end up assessing real token throughput gain with respect to the original LLM CPU baseline.
+Device capacity defines the project boundary: the Tang Nano 9K supports the routed Proposal A or Proposal B `CPU_PUSH` profile separately, while the streaming and combined profiles exceed its logic capacity. The reported gains establish acceleration of the selected operation fixtures; complete-model token throughput remains outside the measured scope. A larger FPGA could place the streaming frontend and both engines together for sustained row/context sweeps and an end-to-end Bonsai throughput study.

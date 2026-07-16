@@ -154,7 +154,7 @@ package bonsai_accel_pkg is
   constant ROLE_OUTPUT_C     : tile_role_t := x"8";
   constant ROLE_SCORES_C     : tile_role_t := x"9";
 
-  -- Terminal error codes. Later commits provide the command logic that emits them.
+  -- Terminal error codes emitted by the shared command logic.
   subtype error_code_t is std_ulogic_vector(3 downto 0);
   constant ERROR_NONE_C             : error_code_t := x"0";
   constant ERROR_BAD_COMMAND_C      : error_code_t := x"1";

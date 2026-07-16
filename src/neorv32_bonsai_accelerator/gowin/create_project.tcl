@@ -1,4 +1,4 @@
-# Create the Tang Nano 9K Gowin project for the combined NEORV32 accelerator.
+# Create a proposal-specific or combined Tang Nano 9K NEORV32 project.
 # Run from the Gowin IDE console with: source /absolute/path/create_project.tcl
 
 set script_dir [file normalize [file dirname [info script]]]

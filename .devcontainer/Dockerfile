@@ -7,6 +7,7 @@ FROM --platform=${DEVCONTAINER_PLATFORM} ubuntu:jammy
 ARG VERIBLE_RELEASE=v0.0-4080-ga0a8d8eb
 ARG RISCV_GCC_RELEASE=rv32i-131023
 ARG RISCV_GCC_ARCHIVE=riscv32-unknown-elf.gcc-13.2.0.tar.gz
+ARG NEORV32_SETUPS_COMMIT=02646bdf8559eded9f8dcb665d9a8990b5aee4ee
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8
@@ -45,7 +46,10 @@ RUN wget -q "https://github.com/chipsalliance/verible/releases/download/${VERIBL
   && tar -C /usr/local --strip-components 1 -xf "verible-${VERIBLE_RELEASE}-linux-static-x86_64.tar.gz" \
   && rm "verible-${VERIBLE_RELEASE}-linux-static-x86_64.tar.gz"
 
-RUN git clone --depth 1 https://github.com/stnolting/neorv32-setups.git "${NEORV32_SETUPS}" \
+RUN git init "${NEORV32_SETUPS}" \
+  && git -C "${NEORV32_SETUPS}" remote add origin https://github.com/stnolting/neorv32-setups.git \
+  && git -C "${NEORV32_SETUPS}" fetch --depth 1 origin "${NEORV32_SETUPS_COMMIT}" \
+  && git -C "${NEORV32_SETUPS}" checkout --detach FETCH_HEAD \
   && git -C "${NEORV32_SETUPS}" submodule update --init --recursive --depth 1 \
   && sed -i 's/RISCV_PREFIX ?= .*/RISCV_PREFIX ?= riscv32-unknown-elf-/g' "${NEORV32_SETUPS}/neorv32/sw/common/common.mk"
 

@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-#define T3_FIXTURE_SOURCE "Bonsai-1.7B-Q1_0.gguf"
+#define T3_FIXTURE_SOURCE "prism-ml/Bonsai-1.7B-gguf@210a9e99f79cb184909d49595906526eb2b3dd9a"
 #define T3_INITIAL_HIDDEN_COUNT 2048u
 #define T3_Q1_2048_ROW_COUNT 8u
 #define T3_Q1_2048_ROW_BYTES 288u

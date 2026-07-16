@@ -15,7 +15,7 @@ On Apple Silicon, the lab container must run as `linux/amd64` because the RISC-V
 Open this repository in VS Code:
 
 ```sh
-cd /Users/uripont/Desktop/1bit-llm-fpga-inference-accelerator-CD
+cd /path/to/1bit-llm-fpga-inference-accelerator-CD
 code .
 ```
 

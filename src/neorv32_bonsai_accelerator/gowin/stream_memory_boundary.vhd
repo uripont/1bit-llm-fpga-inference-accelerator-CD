@@ -1,5 +1,5 @@
--- Synthesis placeholder for the PSRAM-controller boundary.
--- The controller and physical PSRAM interface are added in the next checkpoint.
+-- Compact memory boundary used by CPU_PUSH and combined capacity profiles.
+-- The MEM_STREAM board profile selects psram_stream_boundary and Gowin PSRAM IP.
 
 library ieee;
 use ieee.std_logic_1164.all;

@@ -45,7 +45,6 @@ The third tier, developed after the software profiling, uses early software impl
   (pp: 4096,  tok_s: 14.159, q1: 37.50, attn: 50.48, other: 12.02),
   (pp: 8192,  tok_s: 11.274, q1: 34.79, attn: 64.87, other: 0.34),
   (pp: 16384, tok_s: 5.428,  q1: 12.30, attn: 82.87, other: 4.83),
-  (pp: 32768, tok_s: 0.022,  q1: 3.40,  attn: 94.74, other: 1.86),
 )
 
 #let fmt(x) = {
@@ -90,6 +89,7 @@ The first tier is the full software baseline, running Bonsai-1.7B Q1_0 GGUF thro
   [Machine: MacBookPro with Apple M1 Pro.],
   [Backend: CPU-only `llama.cpp` build with Metal/GPU disabled, Accelerate/BLAS enabled.],
   [Threading: 6 benchmark threads for prompt and decode runs.],
+  [Pinned inputs: model revision, SHA-256, and runtime commits are recorded in `docs/reproducibility.md`.],
 )
 
 The result files for these tables are, using "pp" prompts processed, and "tg" tokens generated:
@@ -100,7 +100,7 @@ The result files for these tables are, using "pp" prompts processed, and "tg" to
   [`results/tier1_llama_cpp_benchmark/full/pl_1_pp_32768_tg_32.log`, as an example output for a specific run], 
 )
 
-The percentages in this tier are shares of profiled operator time. Prefill rows measure prompt processing, while decode rows measure autoregressive token generation as the KV cache grows. The profiling patch accumulates elapsed time inside GGML CPU/BLAS operators, and the summary scripts group that time into three buckets:
+The percentages in this tier are shares of profiled operator time. Prefill rows measure prompt processing directly. Decode attribution is an estimate obtained by subtracting a separately measured prefill profile from a combined prefill/decode profile. The summary records the ratio between derived operator time and measured decode time and suppresses attribution outside a broad 0.5x to 2.0x consistency range. The profiling patch accumulates elapsed time inside GGML CPU/BLAS operators, and the summary scripts group that time into three buckets:
 
 #list(
   [`Q1_0`: time in `MUL_MAT` operations where the source weight tensor is Q1_0.],
@@ -109,8 +109,6 @@ The percentages in this tier are shares of profiled operator time. Prefill rows 
 )
 
 The full sweep can be reproduced with `src/tier1_llama_cpp_benchmark/run-full-benchmark.py` after the `llama.cpp` setup step. The commands and setup details are documented in `src/tier1_llama_cpp_benchmark/README.md`.
-
-#pagebreak()
 
 == Benchmark results
 
@@ -124,7 +122,7 @@ Short and medium prompt prefill is dominated by Q1_0 matrix work. At 128 and 512
 
 #bottleneck-table([Decode summary], decode_rows)
 
-Early decode is also Q1_0-heavy, because each new token applies the fixed model weights while the KV history is still short. Long-context decode shifts toward attention/KV-cache traversal.
+Early decode is also Q1_0-heavy, because each new token applies the fixed model weights while the KV history is still short. The valid attribution rows show the shift toward attention/KV-cache traversal through 16,384 prompt tokens. The 32,768-token run measured 0.022 tokens/s, while its subtraction-derived operator total was 34.425 times the measured decode interval; its operator percentages are therefore excluded from the table and marked invalid in the CSV.
 
 == Tier 1 conclusions: a dual-target approach
 
@@ -208,7 +206,7 @@ For both benchmarks (one for each of the two accelerator targets), the project p
 
 #list(
   [`board`: uses the project's board-target NEORV32 configuration, with all measured code and data placed in 16 KiB of CPU-local instruction memory and 8 KiB of CPU-local data memory. The Tang Nano 9K also provides 8 MiB of PSRAM, reserved for later implementation and evaluation of the hardware memory path.],
-  [`bonsai`: uses enlarged simulated memories to exercise a more representative Bonsai operation shape or exported model fixture. It still may not be an exact Bonsai model, given that it would cause the simulation to run out of memory or run too slowly.],
+  [`bonsai`: uses enlarged simulated memories to exercise a representative Bonsai operation shape or exported model fixture. It remains an operation-level baseline sized for practical simulation.],
 )
 
 The simulation logs and build-size reports are stored beside each summary. The reproducible commands, runner alternatives, and profile definitions are documented in `src/tier3_neorv32_cycle_kernels/README.md`.
@@ -241,11 +239,11 @@ The result files are in:
   [Bonsai], [1], [2,048], [GGUF fixture], [195,602], [12,225.13], [95.51],
 )
 
-The board result is the smallest complete accelerator work unit and establishes the cost of processing one packed Q1_0 group in CPU software simulation. The Bonsai result contains 16 such groups and establishes the cost of a representative row. Future accelerator measurements will report the same operation counts and compare kernel-only cycles against these baseline values.
+The board result is the smallest complete accelerator work unit and establishes the cost of processing one packed Q1_0 group in CPU software simulation. The Bonsai result contains 16 such groups and establishes the cost of a representative row. Hardware evaluation reports the same operation counts and compares complete command and engine-active cycles against these baseline values.
 
 == Attention/KV software-service baseline
 
-The second kernel implements the attention service expected at the accelerator boundary: append the current K/V vectors, map query heads to grouped-query KV heads, scan K to compute scaled QK scores, apply stable exact softmax, scan V for the weighted accumulation, and produce the attention output. Its phase and service counters measure complete CPU software execution, including the ordinary loads and stores used to access K/V data. They therefore establish the combined pre-acceleration software cost of each phase. Later hardware simulations will separate engine compute-active cycles from memory/FIFO wait cycles, allowing compute acceleration and memory-path improvements to be evaluated independently.
+The second kernel implements the attention service expected at the accelerator boundary: append the current K/V vectors, map query heads to grouped-query KV heads, scan K to compute scaled QK scores, apply stable softmax, scan V for the weighted accumulation, and produce the attention output. Its phase and service counters measure complete CPU software execution, including the ordinary loads and stores used to access K/V data. They therefore establish the combined pre-acceleration software cost of each phase. Later hardware simulations separate engine compute-active cycles from memory/FIFO wait cycles, allowing compute acceleration and memory-path improvements to be evaluated independently.
 
 The result files are:
 
@@ -290,11 +288,9 @@ The result files are:
   [Bonsai GQA], [183], [257,965], [11,067], [224,674],
 )
 
-Both profiles deliberately perform 64 score MACs and 64 value MACs, and their service totals are correspondingly close. The score and value reductions dominate execution, with exact softmax accounting for only a small share at a 2-token context length. This agreement is useful as a validation of the operation and counter contract, yet `ctx = 2` is not a long-context bandwidth benchmark, which is too expensive to run in simulation (at least in this early benchmarking stage).
+Both profiles deliberately perform 64 score MACs and 64 value MACs, and their service totals are correspondingly close. The score and value reductions dominate execution, with softmax accounting for only a small share at a 2-token context length. This agreement validates the operation and counter contract at the selected compatibility shape. Long-context throughput remains a separate characterization task with substantially higher simulation cost.
 
-The byte counters describe logical K/V traffic implied by the operation. True separation of compute-active, FIFO-wait, buffer-wait, and total command cycles becomes possible only after the hardware interface and engine exist. The future comparison will thus first measure a straightforward hardware implementation and then retain its compute service while improving the stream/FIFO memory path.
-
-#pagebreak()
+The byte counters describe logical K/V traffic implied by the operation. The hardware interface and engine add separate compute-active, FIFO-wait, buffer-wait, and total-command counters. This supports a straightforward hardware measurement followed by a comparison against the same compute service using the descriptor-driven memory path.
 
 = Conclusions
 
@@ -302,7 +298,7 @@ The three tiers now form a direct measurement chain:
 
 #list(
   [Tier 1 identifies when Q1_0 computation or attention/KV work dominates real `llama.cpp` inference, identifying two separate bottlenecks as acceleration targets: Q1_0 matrix-vector work and attention/KV-cache traversal.],
-  [Wrapping these two targets as external functions, Tier 2 supplies full-model call counts and operation dimensions, which will be useful for extrapolation from a single execution to how it would affect end-to-end inference performance.],
+  [Wrapping these two targets as external functions, Tier 2 supplies full-model call counts and operation dimensions that support later extrapolation from operation-level results toward end-to-end inference impact.],
   [Tier 3 supplies simulated NEORV32 software cycle baselines for the services selected for acceleration, to serve as a baseline for later hardware acceleration comparisons.],
 )
 
