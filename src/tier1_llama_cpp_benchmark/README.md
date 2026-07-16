@@ -62,6 +62,18 @@ run makes the profiled decode delta less sensitive to prefill-subtraction noise.
 The context window defaults to 33024 so the 32768-token prompt still has room
 for decode tokens when a shorter 32-token max-context run is used.
 
+Decode operator attribution is estimated by subtracting the separately measured
+prefill profile from the combined prefill/decode profile. The summary records
+the ratio between the resulting operator time and measured decode time. Rows
+outside a broad 0.5x to 2.0x consistency range retain measured throughput but
+leave operator attribution empty and carry an explicit invalid status.
+
+Rebuild both CSV summaries from the committed logs without rerunning inference:
+
+```sh
+src/tier1_llama_cpp_benchmark/run-full-benchmark.py --summarize-only
+```
+
 Default paths:
 
 ```sh

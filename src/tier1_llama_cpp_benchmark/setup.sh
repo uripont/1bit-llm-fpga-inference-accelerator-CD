@@ -16,7 +16,9 @@ MODEL="${MODEL:-models/bonsai-1.7b-gguf/Bonsai-1.7B-Q1_0.gguf}"
 MODEL_SOURCE="${MODEL_SOURCE:-}"
 HF_REPO="${HF_REPO:-prism-ml/Bonsai-1.7B-gguf}"
 HF_FILE="${HF_FILE:-Bonsai-1.7B-Q1_0.gguf}"
-HF_URL="${HF_URL:-https://huggingface.co/$HF_REPO/resolve/main/$HF_FILE}"
+HF_REVISION="${HF_REVISION:-210a9e99f79cb184909d49595906526eb2b3dd9a}"
+HF_SHA256="${HF_SHA256:-3d7c6c90dd98717a203adb22d5eacd2581850e40aa5327e144b97766cae5f7e3}"
+HF_URL="${HF_URL:-https://huggingface.co/$HF_REPO/resolve/$HF_REVISION/$HF_FILE}"
 REPO_PARENT="$(cd .. && pwd)"
 DESKTOP_SOURCE="$REPO_PARENT/1bit-llm-inference-accelerator/$MODEL"
 
@@ -32,7 +34,8 @@ if [[ ! -f "$MODEL" ]]; then
     mkdir -p "$(dirname "$MODEL")"
     tmp_model="$MODEL.download"
     echo "downloading model from Hugging Face:"
-    echo "  $HF_URL" # Small python snippet to show progress because curl/wget are not guaranteed to be present.
+    echo "  $HF_URL"
+    # Small Python snippet to show progress because curl/wget are not guaranteed to be present.
     if python3 - "$HF_URL" "$tmp_model" <<'PY'
 import shutil
 import sys
@@ -75,6 +78,19 @@ PY
     fi
   fi
 fi
+
+if command -v sha256sum >/dev/null 2>&1; then
+  model_sha256="$(sha256sum "$MODEL" | awk '{print $1}')"
+else
+  model_sha256="$(shasum -a 256 "$MODEL" | awk '{print $1}')"
+fi
+if [[ "$model_sha256" != "$HF_SHA256" ]]; then
+  echo "error: model SHA-256 mismatch" >&2
+  echo "  expected: $HF_SHA256" >&2
+  echo "  actual:   $model_sha256" >&2
+  exit 1
+fi
+echo "verified model SHA-256: $model_sha256"
 
 # Clone llama.cpp only if the expected checkout is not already present.
 if [[ ! -d "$LLAMA_REPO/.git" ]]; then

@@ -11,6 +11,8 @@ from pathlib import Path
 
 FIELDS = ("calls", "time_us", "dst_elems", "q1_groups", "weight_apps")
 LOG_RE = re.compile(r"pl_(\d+)_pp_(\d+)_tg_(\d+)\.log$")
+DECODE_PROFILE_RATIO_MIN = 0.5
+DECODE_PROFILE_RATIO_MAX = 2.0
 
 
 def parse_int_list(value):
@@ -193,6 +195,9 @@ def write_decode_summary(by_key, output_path):
         q1_us = sum_field(records, "time_us", "MUL_MAT", "q1_0")
         attn_us = sum_field(records, "time_us", "FLASH_ATTN_EXT")
         other_us = total_us - q1_us - attn_us
+        decode_us = bench_total["t_tg"] * 1e6
+        profile_ratio = total_us / decode_us if decode_us > 0 else 0.0
+        attribution_valid = DECODE_PROFILE_RATIO_MIN <= profile_ratio <= DECODE_PROFILE_RATIO_MAX
         others = []
         for (op, src0_type), time_us in op_time(records).items():
             if op == "MUL_MAT" and src0_type == "q1_0":
@@ -210,13 +215,15 @@ def write_decode_summary(by_key, output_path):
             "decode_s": f"{bench_total['t_tg']:.6f}",
             "decode_tok_s": f"{bench_total['speed_tg']:.3f}",
             "decode_profile_s": f"{total_us / 1e6:.6f}",
-            "q1_matmul_pct": f"{pct(q1_us, total_us):.2f}",
-            "attention_pct": f"{pct(attn_us, total_us):.2f}",
-            "other_pct": f"{pct(other_us, total_us):.2f}",
-            "q1_matmul_s": f"{q1_us / 1e6:.6f}",
-            "attention_s": f"{attn_us / 1e6:.6f}",
-            "other_s": f"{other_us / 1e6:.6f}",
-            "top_other": top_other,
+            "profile_to_decode_ratio": f"{profile_ratio:.3f}",
+            "attribution_status": "estimated" if attribution_valid else "invalid_profile_wall_mismatch",
+            "q1_matmul_pct": f"{pct(q1_us, total_us):.2f}" if attribution_valid else "",
+            "attention_pct": f"{pct(attn_us, total_us):.2f}" if attribution_valid else "",
+            "other_pct": f"{pct(other_us, total_us):.2f}" if attribution_valid else "",
+            "q1_matmul_s": f"{q1_us / 1e6:.6f}" if attribution_valid else "",
+            "attention_s": f"{attn_us / 1e6:.6f}" if attribution_valid else "",
+            "other_s": f"{other_us / 1e6:.6f}" if attribution_valid else "",
+            "top_other": top_other if attribution_valid else "",
         })
     write_csv(output_path, rows)
 
