@@ -121,6 +121,7 @@ begin
     variable segments_v, kv_tiles_per_position_v : natural;
   begin
     service_config_valid <= '1';
+    kv_tiles_per_position_v := 0;
     if selected_service = SERVICE_ATTN_KV_C then
       heads_v := to_integer(unsigned(config_attn_heads));
       kv_heads_v := to_integer(unsigned(config_attn_kv_heads));

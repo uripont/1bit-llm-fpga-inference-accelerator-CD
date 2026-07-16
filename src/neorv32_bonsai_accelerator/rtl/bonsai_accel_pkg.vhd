@@ -132,9 +132,10 @@ package bonsai_accel_pkg is
   -- a final partial tile declares only its valid word count.
   constant ATTN_VECTOR_TILE_ELEMENTS_C : natural := 32;
   constant ATTN_VECTOR_TILE_WORDS_C    : natural := 16;
-  constant ATTN_MAX_HEAD_DIM_C         : natural := 128;
-  constant ATTN_MAX_KV_HEADS_C         : natural := 8;
-  constant ATTN_SCORE_CAPACITY_C       : natural := 256;
+  -- Tang Nano 9K implementation profile used by the board and GQA evaluations.
+  constant ATTN_MAX_HEAD_DIM_C         : natural := 32;
+  constant ATTN_MAX_KV_HEADS_C         : natural := 1;
+  constant ATTN_SCORE_CAPACITY_C       : natural := 128;
 
   constant TILE_DIRECTION_INPUT_C  : std_ulogic := '0';
   constant TILE_DIRECTION_OUTPUT_C : std_ulogic := '1';

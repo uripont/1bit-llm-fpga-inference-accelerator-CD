@@ -4,6 +4,9 @@ This directory contains the project-owned RTL and firmware for the hardware
 accelerator described in `docs/02-bonsai-accelerator-hardware-blueprint.pdf`.
 The upstream NEORV32 submodule remains unchanged.
 
+The reproducible Tang Nano 9K Gowin project and its pre-PSRAM setup result are
+documented in `gowin/README.md`.
+
 The current implementation establishes the CFS identity, interface version,
 shared register map, service and transfer identifiers, semantic tile roles,
 command lifecycle, and per-command counters. The attention service contract

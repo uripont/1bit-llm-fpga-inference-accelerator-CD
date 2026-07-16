@@ -69,6 +69,9 @@ begin
   begin
     lookup_role <= transaction_role_i;
     mapped_tile <= resize(unsigned(transaction_tile_i), 32);
+    tile_v := 0;
+    kv_head_v := 0;
+    segment_v := 0;
     segments_v := (to_integer(unsigned(head_dim_i)) + ATTN_VECTOR_TILE_ELEMENTS_C - 1) /
                   ATTN_VECTOR_TILE_ELEMENTS_C;
     if (transaction_direction_i = TILE_DIRECTION_OUTPUT_C) and
