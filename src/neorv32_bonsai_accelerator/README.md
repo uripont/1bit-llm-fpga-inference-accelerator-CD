@@ -79,12 +79,12 @@ The compatibility evaluation produced:
 
 | Profile | Tier 3 software | `CPU_PUSH` command | Engine active | Command speedup | Active-cycle speedup |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Board, 1 x 128 | 7,934 | 1,781 | 54 | 4.455x | 146.926x |
-| Bonsai, 1 x 2048 | 195,602 | 27,841 | 849 | 7.026x | 230.391x |
+| Board, 1 x 128 | 7,934 | 1,804 | 82 | 4.398x | 96.756x |
+| Bonsai, 1 x 2048 | 195,602 | 27,863 | 1,297 | 7.020x | 150.811x |
 
 Both outputs match their Tier 3 checksums. `CPU_PUSH` prepares the packed
 payload before command launch, validates each requested tile once, and writes
-the complete tile through a tight MMIO burst. This keeps the full service 4.5x
+the complete tile through a tight MMIO burst. This keeps the full service 4.4x
 to 7.0x faster than Tier 3 software without depending on `MEM_STREAM`.
 `MEM_STREAM` remains a separate memory-path optimization, primarily for the
 attention/KV proposal and later sustained-workload evaluation.

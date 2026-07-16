@@ -28,10 +28,10 @@ SUCCESS_PATTERN=evaluation_status=PASS \
 /workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_top.vhd:393:5:@0ms:(assertion note): [NEORV32] Processor Configuration: CPU (single-core) IMEM-ROM DMEM I-CACHE D-CACHE XBUS CLINT GPIO UART0 UART1 SPI SDI TWI TWD PWM WDT TRNG CFS NEOLED GPTMR ONEWIRE DMA SLINK SYSINFO TRACER OCD OCD-AUTH OCD-HWBP 
 /workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_top.vhd:429:5:@0ms:(assertion warning): [NEORV32] Assuming this is a simulation.
 /workspaces/1bit-llm-fpga-inference-accelerator-CD/neorv32-setups/neorv32/rtl/core/neorv32_top.vhd:441:5:@0ms:(assertion note): [NEORV32] BOOT_MODE_SELECT 2 - booting IMEM image
+[progress] Proposal A board evaluation: 30s elapsed
 kernel=q1_matvec_engine
 backend=hardware_neorv32_cfs
 transfer_mode=cpu_push
-[progress] Proposal A board evaluation: 31s elapsed
 cpu_push_strategy=tile_burst_prepacked
 q1_input_source=synthetic_packed
 q1_scale_format=fixed_q8
@@ -43,18 +43,19 @@ dot_elements=128
 q1_groups=1
 activation_q8_blocks=4
 physical_q8_block_transfers=4
-command_cycles=1781
-engine_cycles=1665
-active_cycles=54
+command_cycles=1804
+engine_cycles=1693
+active_cycles=82
 input_wait_cycles=1605
 output_wait_cycles=0
 control_cycles=6
 frontend_input_wait=1559
-frontend_output_wait=112
+frontend_output_wait=107
 input_bytes=164
 output_bytes=4
 work_groups=1
 checksum=137
 expected_checksum=137
 evaluation_status=PASS
+[progress] Proposal A board evaluation: 61s elapsed
 [pass] CFS firmware success marker: evaluation_status=PASS
