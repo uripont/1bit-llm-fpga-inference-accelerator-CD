@@ -1,0 +1,514 @@
+/* Paired Taalas/Talos output visualizations. Kept separate from the deck core. */
+.taalas-stream {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(100%, 500px);
+  height: clamp(310px, 34vw, 420px);
+  margin: 0 auto;
+}
+
+.taalas-layout { align-items: stretch; }
+
+.taalas-model-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(100%, 500px);
+  height: clamp(310px, 34vw, 420px);
+  margin: 0 auto;
+  padding: 0;
+}
+
+.taalas-model-panel .model-scale { gap: 9px; }
+
+.taalas-model-window {
+  display: grid;
+  align-content: center;
+  min-height: 0;
+  padding: clamp(18px, 2.2vw, 30px);
+  overflow: hidden;
+  background: linear-gradient(180deg, rgb(234 240 251 / 0.82), rgb(255 255 255 / 0.55));
+}
+
+.model-output-header.model-output-header-size { justify-content: flex-end; border-bottom-color: var(--blue); }
+.model-output-header.model-output-header-size > h3 { color: var(--blue); }
+.model-output-header-blank { border-bottom-color: transparent; }
+
+.taalas-panel-footer {
+  min-height: 78px;
+  padding: 11px 2px 0;
+  border-top: 1px solid var(--line);
+}
+
+.taalas-model-summary {
+  margin: 0;
+  padding-left: 12px;
+  border-left: 3px solid var(--rust);
+  color: var(--ink);
+  line-height: 1.24;
+}
+
+.taalas-stream-output-only { grid-template-rows: auto minmax(0, 1fr) auto; }
+
+.taalas-token-cadence {
+  display: grid;
+  align-content: start;
+  justify-items: end;
+  gap: 2px;
+}
+
+.taalas-token-cadence > span { color: var(--muted); }
+.taalas-token-cadence > strong {
+  color: var(--rust);
+  font-variant-numeric: tabular-nums;
+}
+
+.model-output-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 16px;
+  padding: 0 2px 12px;
+  border-bottom: 4px solid var(--rust);
+}
+
+.model-output-header-speed-only {
+  justify-content: flex-end;
+}
+
+.model-output-header > span,
+.model-output-cadence > span,
+.model-scale-copy > span,
+.model-scale > small {
+  color: var(--muted);
+}
+
+.model-output-header > strong,
+.model-output-cadence > strong {
+  color: var(--rust);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.model-output-header > h3 {
+  margin: 0;
+  color: var(--rust);
+  white-space: nowrap;
+}
+
+.taalas-stream-window {
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, rgb(234 240 251 / 0.78), rgb(250 236 230 / 0.48));
+}
+
+.taalas-stream-window::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(180deg, var(--paper), transparent 10%, transparent 90%, var(--paper));
+}
+
+.taalas-response-scroller {
+  height: 100%;
+  padding: clamp(12px, 2vw, 22px) clamp(10px, 1.5vw, 18px);
+  overflow: hidden;
+}
+
+.taalas-response-copy {
+  position: relative;
+  z-index: 1;
+  max-width: none;
+  margin: 0;
+  color: var(--ink);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.taalas-assistant-mark {
+  margin-right: 0.55em;
+  color: var(--rust);
+}
+
+.taalas-response-cursor {
+  display: inline-block;
+  width: 0.45ch;
+  height: 0.9em;
+  margin-left: 3px;
+  background: var(--rust);
+  vertical-align: -0.08em;
+  animation: taalas-response-blink 0.5s step-end infinite;
+}
+
+.output-points-window {
+  align-content: stretch;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.output-point-list {
+  display: grid;
+  grid-template-rows: repeat(3, minmax(0, 1fr));
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.output-point-list-four { grid-template-rows: repeat(4, minmax(0, 1fr)); }
+
+.motivation-slide .taalas-model-panel,
+.motivation-slide .taalas-stream {
+  height: clamp(390px, 38vw, 470px);
+}
+
+.motivation-slide .model-output-header.model-output-header-blank {
+  border-bottom-color: transparent;
+}
+
+.motivation-slide .output-points-window {
+  padding-top: 14px;
+  padding-bottom: 14px;
+  background: var(--paper);
+}
+
+.motivation-slide .output-point-list-four { row-gap: 22px; }
+
+.motivation-slide .output-point-list li {
+  padding: 8px 0;
+  border-bottom: 0;
+}
+
+.motivation-slide .taalas-model-panel .taalas-panel-footer {
+  border-top-color: transparent;
+}
+
+.bonsai-points-panel .model-output-header.model-output-header-blank {
+  border-bottom-color: transparent;
+}
+
+.bonsai-points-panel .output-points-window {
+  padding-top: 14px;
+  padding-bottom: 14px;
+  background: var(--paper);
+}
+
+.bonsai-points-panel .output-point-list {
+  row-gap: 22px;
+}
+
+.bonsai-points-panel .output-point-list li {
+  padding: 8px 0;
+  border-bottom: 0;
+}
+
+.bonsai-points-panel .taalas-panel-footer {
+  border-top-color: transparent;
+}
+
+.output-point-list li {
+  display: grid;
+  align-content: center;
+  min-height: 0;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.output-point-list li:last-child { border-bottom: 0; }
+.output-point-list h3,
+.output-point-list p { margin: 0; }
+.output-point-list p { margin-top: 5px; color: var(--muted); line-height: 1.24; }
+
+.letter-stream-window {
+  display: grid;
+  place-items: center;
+  min-height: 0;
+  padding: clamp(18px, 2.2vw, 30px);
+  overflow: hidden;
+  background: linear-gradient(180deg, rgb(250 236 230 / 0.5), rgb(234 240 251 / 0.7));
+}
+
+.letter-name-output {
+  display: grid;
+  align-content: end;
+  gap: 8px;
+  width: 100%;
+  min-height: 8em;
+  margin: 0;
+  color: var(--ink);
+  line-height: 1.35;
+}
+
+.letter-name-row {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: clamp(8px, 1vw, 14px);
+}
+
+.letter-name-cell {
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.bonsai-memory-footer { display: grid; align-content: start; justify-items: end; }
+.bonsai-memory-footer h3 { margin: 0; color: var(--blue); }
+.bonsai-host-summary { margin: 0; color: var(--ink); line-height: 1.24; }
+
+.model-output-footer {
+  display: grid;
+  grid-template-columns: minmax(110px, 0.72fr) minmax(190px, 1.28fr);
+  gap: 18px;
+  align-items: end;
+  padding: 12px 2px 0;
+  border-top: 1px solid var(--line);
+}
+
+.model-output-cadence {
+  display: grid;
+  gap: 3px;
+}
+
+.model-scale {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 4px;
+  min-width: 0;
+}
+
+.model-scale-copy {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.model-scale-copy > strong {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.model-scale-cells {
+  display: grid;
+  grid-template-columns: repeat(40, minmax(0, 1fr));
+  gap: 1px;
+  height: auto;
+}
+
+.model-scale-cells i { min-width: 0; aspect-ratio: 1; background: rgb(51 92 145 / 0.1); }
+.model-scale-cells i.is-active { background: var(--blue); }
+.model-scale-toy .model-scale-cells i.is-partial {
+  background: radial-gradient(circle, var(--rust) 0 24%, transparent 30%);
+  box-shadow: inset 0 0 0 1px rgb(168 77 50 / 0.32);
+}
+
+.talos-slide-stack { gap: 13px; }
+.talos-result-layout { grid-template-columns: minmax(0, 0.92fr) minmax(420px, 1.08fr); }
+
+.talos-character-stream {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: 100%;
+  height: clamp(275px, 24vw, 320px);
+  margin: 0 auto;
+}
+
+.talos-character-window {
+  display: grid;
+  grid-template-columns: minmax(145px, 0.82fr) minmax(0, 1.18fr);
+  min-height: 0;
+  overflow: hidden;
+  background: linear-gradient(90deg, rgb(234 240 251 / 0.84), rgb(255 255 255 / 0.72) 48%, rgb(250 236 230 / 0.42));
+}
+
+.talos-rtl-path {
+  position: relative;
+  display: grid;
+  grid-template-rows: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+  min-height: 0;
+  padding: 11px 14px;
+}
+
+.talos-rtl-line {
+  position: absolute;
+  z-index: 0;
+  top: 22px;
+  bottom: 22px;
+  left: 50%;
+  width: 1px;
+  background: var(--line-dark);
+  transform: translateX(-50%);
+}
+
+.talos-moving-token {
+  position: absolute;
+  z-index: 3;
+  bottom: 29px;
+  left: 50%;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--rust);
+  box-shadow: 0 0 0 4px rgb(168 77 50 / 0.14), 0 0 12px rgb(168 77 50 / 0.38);
+  animation: talos-token-rise 0.72s ease-in-out infinite;
+}
+
+.talos-rtl-node {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  place-content: center;
+  min-height: 0;
+  padding: 5px 7px;
+  border: 1px solid var(--blue);
+  background: rgb(255 255 255 / 0.93);
+  text-align: center;
+}
+
+.talos-rtl-output { border-color: var(--rust); background: var(--rust-soft); }
+.talos-rtl-node > span { display: block; margin-top: 1px; color: var(--muted); }
+
+.talos-name-console {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-width: 0;
+  min-height: 0;
+  padding: 13px 16px 11px;
+  border-left: 1px solid var(--line);
+  overflow: hidden;
+  background: rgb(255 255 255 / 0.5);
+}
+
+.talos-name-console > span:first-child,
+.talos-name-console > small { color: var(--muted); }
+
+.talos-generated-text {
+  align-self: center;
+  display: block;
+  min-height: 5.6em;
+  color: var(--ink);
+  line-height: 1.1;
+  white-space: pre-line;
+}
+
+.talos-text-cursor {
+  display: inline-block;
+  width: 0.52ch;
+  height: 0.9em;
+  margin-left: 3px;
+  background: var(--rust);
+  vertical-align: -0.08em;
+  animation: talos-cursor-blink 0.5s step-end infinite;
+}
+
+.reveal .slides section.project-slide .talos-character-stream .model-output-header > span,
+.reveal .slides section.project-slide .talos-character-stream .model-output-cadence > span,
+.reveal .slides section.project-slide .talos-character-stream .model-scale-copy > span,
+.reveal .slides section.project-slide .talos-character-stream .model-scale > small,
+.reveal .slides section.project-slide .talos-name-console > span:first-child,
+.reveal .slides section.project-slide .talos-name-console > small {
+  font-size: 0.82rem !important;
+  letter-spacing: 0.045em !important;
+}
+
+.reveal .slides section.project-slide .talos-character-stream .model-output-header > strong { font-size: var(--type-title) !important; }
+.reveal .slides section.project-slide .talos-character-stream .model-output-cadence > strong { font-size: 1rem !important; }
+.reveal .slides section.project-slide .talos-character-stream .model-scale-copy > strong,
+.reveal .slides section.project-slide .talos-character-stream .model-scale > small { font-size: 0.76rem !important; }
+.reveal .slides section.project-slide .talos-rtl-node > strong { font-size: 0.8rem !important; }
+.reveal .slides section.project-slide .talos-rtl-node > span { font-size: 0.68rem !important; }
+.reveal .slides section.project-slide .talos-generated-text { font-size: 1.18rem !important; }
+
+.project-slide:not(.present) .taalas-response-cursor,
+.project-slide:not(.present) .talos-moving-token,
+.project-slide:not(.present) .talos-text-cursor { animation-play-state: paused; }
+
+@keyframes taalas-response-blink { 50% { opacity: 0; } }
+
+@keyframes talos-token-rise {
+  0% { opacity: 0; transform: translate(-50%, 0) scale(0.72); }
+  12% { opacity: 1; }
+  82% { opacity: 1; }
+  100% { opacity: 0; transform: translate(-50%, -155px) scale(1.08); }
+}
+
+@keyframes talos-cursor-blink { 50% { opacity: 0; } }
+
+@media (max-width: 900px) {
+  .taalas-stream { width: 100%; height: 175px; }
+  .taalas-model-panel { width: 100%; height: 175px; padding: 0; }
+  .taalas-model-window { padding: 10px 14px; }
+  .taalas-model-panel .model-scale-cells { grid-template-columns: repeat(80, minmax(0, 1fr)); }
+  .taalas-model-summary { padding-left: 8px; }
+  .taalas-panel-footer { min-height: 58px; padding-top: 6px; }
+  .motivation-slide .taalas-model-panel,
+  .motivation-slide .taalas-stream,
+  .bonsai-model-slide .taalas-model-panel,
+  .bonsai-model-slide .taalas-stream { height: 255px; }
+  .model-output-header { padding-bottom: 7px; border-bottom-width: 3px; }
+  .model-output-footer {
+    grid-template-columns: minmax(88px, 0.7fr) minmax(0, 1.3fr);
+    gap: 10px;
+    padding-top: 7px;
+  }
+  .model-scale { gap: 2px; }
+  .talos-slide-stack { gap: 8px; }
+  .talos-result-layout { grid-template-columns: minmax(0, 1fr); }
+  .talos-character-stream { height: 245px; }
+  .talos-character-window { grid-template-columns: minmax(118px, 0.72fr) minmax(0, 1.28fr); }
+}
+
+@media (max-width: 420px) {
+  .output-point-list p { display: none; }
+  .talos-slide .talos-slide-stack > .flow { display: none; }
+  .talos-result-layout { gap: 7px; }
+  .talos-result-layout > .stack > .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+  .talos-slide .metric { padding: 7px 8px; }
+  .talos-slide .metric small { display: none; }
+  .talos-character-stream { height: 195px; }
+  .talos-character-window { grid-template-columns: minmax(98px, 0.68fr) minmax(0, 1.32fr); }
+  .talos-rtl-path { padding: 7px; }
+  .talos-rtl-node > span { display: none; }
+  .talos-name-console { padding: 8px 9px; }
+  .talos-generated-text { min-height: 0; overflow: hidden; }
+  .model-scale > small { display: none; }
+}
+
+@media (max-height: 650px) {
+  .taalas-stream { height: min(165px, 32vh); }
+  .taalas-model-panel { height: min(165px, 32vh); padding: 0; }
+  .taalas-model-window { padding: 8px 12px; }
+  .taalas-model-panel .model-scale-cells { grid-template-columns: repeat(80, minmax(0, 1fr)); }
+  .taalas-model-summary { padding-left: 7px; }
+  .taalas-panel-footer { min-height: 54px; padding-top: 5px; }
+  .model-output-footer { gap: 8px; padding-top: 5px; }
+  .model-scale > small { display: none; }
+  .talos-character-stream { height: min(220px, 48vh); }
+  .talos-rtl-node { padding: 2px 4px; }
+  .reveal .slides section.project-slide .talos-character-stream .model-output-header > span,
+  .reveal .slides section.project-slide .model-output-cadence > span,
+  .reveal .slides section.project-slide .model-scale-copy > span,
+  .reveal .slides section.project-slide .model-scale-copy > strong,
+  .reveal .slides section.project-slide .model-output-cadence > strong,
+  .reveal .slides section.project-slide .talos-name-console > span:first-child,
+  .reveal .slides section.project-slide .talos-name-console > small,
+  .reveal .slides section.project-slide .talos-rtl-node > strong,
+  .reveal .slides section.project-slide .talos-rtl-node > span { font-size: 0.68rem !important; }
+  .reveal .slides section.project-slide .talos-generated-text { font-size: 0.92rem !important; }
+}
+
+@media (max-height: 650px) and (min-aspect-ratio: 4 / 3) {
+  .taalas-stream { width: min(100%, 420px); height: min(250px, 56vh); }
+  .taalas-model-panel { width: min(100%, 420px); height: min(250px, 56vh); }
+  .talos-result-layout { grid-template-columns: minmax(0, 0.92fr) minmax(360px, 1.08fr); }
+  .talos-character-stream { height: min(220px, 48vh); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .taalas-response-cursor,
+  .talos-moving-token,
+  .talos-text-cursor { animation: none !important; }
+}
