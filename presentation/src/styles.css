@@ -860,6 +860,28 @@ body {
   
 }
 
+.cover-course {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  max-width: 790px;
+  padding: 14px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.cover-course img {
+  flex: 0 0 auto;
+  width: 142px;
+  height: auto;
+}
+
+.cover-course p {
+  color: var(--ink) !important;
+  font-size: 0.94rem;
+  line-height: 1.28 !important;
+}
+
 .cover-meta {
   display: flex;
   gap: 24px;
@@ -1348,6 +1370,15 @@ body {
     
   }
 
+  .cover-course {
+    gap: 12px;
+    padding: 10px 0;
+  }
+
+  .cover-course img {
+    width: 124px;
+  }
+
   .bit-field {
     grid-template-columns: repeat(8, minmax(0, 1fr));
   }
@@ -1594,6 +1625,18 @@ body {
   .cover-meta {
     padding-top: 2px;
     
+  }
+
+  .cover-course {
+    padding: 7px 0;
+  }
+
+  .cover-course img {
+    width: 108px;
+  }
+
+  .cover-course p {
+    font-size: 0.72rem;
   }
 }
 

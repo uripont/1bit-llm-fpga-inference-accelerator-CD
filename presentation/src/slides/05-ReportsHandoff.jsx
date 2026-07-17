@@ -48,7 +48,7 @@ export default function ReportsHandoff() {
                   <img
                     className="report-group-page"
                     key={`${report.folder}-${pageIndex + 1}`}
-                    src={`/report-previews/${report.folder}/page-${pageIndex + 1}.jpg`}
+                    src={`${import.meta.env.BASE_URL}report-previews/${report.folder}/page-${pageIndex + 1}.jpg`}
                     alt=""
                     aria-hidden="true"
                     loading="eager"

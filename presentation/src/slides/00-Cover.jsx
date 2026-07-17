@@ -8,6 +8,13 @@ export default function Cover() {
         <div className="cover-copy">
           <h1>1-bit LLM FPGA-based<br />{" "}inference accelerator</h1>
           <p className="cover-subtitle">From measured Bonsai bottlenecks to board-feasible hardware services.</p>
+          <div className="cover-course">
+            <img
+              src={`${import.meta.env.BASE_URL}images/polimi-logo.svg`}
+              alt="Politecnico di Milano"
+            />
+            <p>Custom final project for the Design of Hardware Accelerators course at Politecnico di Milano.</p>
+          </div>
           <div className="cover-meta">
             <span>Oriol Pont</span>
             <span>July 2026</span>

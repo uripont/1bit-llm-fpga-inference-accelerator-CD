@@ -20,7 +20,7 @@ const evaluationEntries = [
 
 const reportPages = (folder, count) =>
   Array.from({ length: count }, (_, index) =>
-    `/report-previews/${folder}/page-${index + 1}.jpg`,
+    `${import.meta.env.BASE_URL}report-previews/${folder}/page-${index + 1}.jpg`,
   );
 
 const benchmarkReportPages = reportPages("benchmark", 5);
