@@ -48,19 +48,3 @@ This profile uses the generated IP under `ip/`: a 27-to-54 MHz PLL and the
 single-channel Gowin PSRAM HS controller configured for DQ16, 64-bit user
 beats, 32-byte bursts, and six-cycle initial latency. The adapter enforces the
 controller's 18-cycle minimum interval between burst commands.
-
-## Proposal A result
-
-Gowin FPGA Designer Education V1.9.11.03 successfully places and routes the `proposal_a` profile for `GW1NR-LV9QN88PC6/I5` at the board's 27 MHz clock. The final timing report gives 32.678 MHz Fmax with zero setup and hold violations. Routed resource use is 6,758/8,640 logic elements (79%), 3,329/6,693 registers (50%), 16/26 BSRAM blocks (62%), and 8/10 DSP blocks (80%).
-
-The Q1 engine reduces four signed lanes per cycle; this keeps the operation contract unchanged while meeting the board clock. The `combined` profile is an integration check containing both reduced engines and shared frontends. Gowin maps it to 16,830/8,640 logic elements (195%) and stops at the capacity check. Each proposal therefore has its own synthesis configuration for board-feasibility assessment. Raw combined evidence is preserved at `results/gowin_synthesis/combined/synthesis.log`.
-
-## Proposal B CPU push result
-
-Gowin FPGA Designer Education V1.9.11.03 successfully places and routes the `proposal_b_cpu_push` profile at 27 MHz. The final timing report gives 28.377 MHz Fmax with zero setup and hold violations. Routed resource use is 7,890/8,640 logic elements (92%), 4,331/6,693 registers (65%), 10/26 BSRAM blocks (39%), and three `MULT18X18` plus two `MULTADDALU18X18` DSP primitives. The profile implements the selected `ctx=2` attention operation, a one-word CPU ingress/egress FIFO, and the full CFS measurement categories. MEM_STREAM logic and its PSRAM boundary are absent from this bitstream.
-
-## Proposal B MEM_STREAM result
-
-Gowin FPGA Designer Education V1.9.11.03 successfully analyzes and maps the `proposal_b_mem_stream` profile, including the NEORV32 SoC, attention engine, descriptor streamer, generated PLL, and generated DQ16 PSRAM controller. The mapped design requires 11,578/8,640 logic elements (134%). Gowin therefore stops synthesis at the device-capacity check, before place and route, so this profile has no routed timing result.
-
-The CPU FIFO and software memory aperture are physically absent from this profile. Its capacity failure therefore applies to the intended MEM_STREAM-only implementation rather than a build containing both data paths. Together with the routed CPU_PUSH result, this establishes that Proposal B's implemented `ctx=2` attention engine fits the Tang Nano 9K with CPU_PUSH, while adding Gowin's DQ16 PSRAM controller and descriptor path exceeds the remaining logic capacity.
